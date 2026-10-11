@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 from brightcove import PolicyKeyError, policy_key, resolve_clip
-from cards import cleanup_cards, idle_card, render_card
+from cards import CardVideoUnavailable, card_video, cleanup_cards, idle_card, render_card
 from clip_queue import ClipQueue
 from http_util import get_json
 from media_server import CardServer, is_loopback
@@ -108,6 +108,7 @@ class PlayerOptions:
     max_height: int = 1080
     quality: str = "auto"
     show_cards: bool = True
+    card_mode: str = "video"  # video | image (off is show_cards=False)
     port: int = 0
     known_hosts: list = field(default_factory=list)
     overlay_path: str | None = None
@@ -242,6 +243,13 @@ class NHLVideoPlayer:
         self._status_key = None
         self._card_warned = False
         self._image_session = False
+        self._expect_url = None
+        self._clip_playing_seen = False
+        self._card_cache = {}
+        self._card_lock = threading.Lock()
+        self._card_threads = {}
+        self._video_cards_ok = True
+        self._card_hold = 0.0
         self._watchdog = None
         self._started_at = 0.0
         self._progress = (None, 0.0)  # (current_time, monotonic when it last changed)
@@ -566,41 +574,190 @@ class NHLVideoPlayer:
             self._last_status = None
         self.stop.wait(RECEIVER_RESTART_PAUSE)
 
+    # -- card videos ------------------------------------------------------------
+    def _card_seconds(self):
+        return max(1.0, float(self.options.card_seconds or 0))
+
+    def _make_card_video(self, clip):
+        png = render_card(clip.player_id, clip.team, clip.title, out_dir=self.overlay_dir)
+        started = time.monotonic()
+        mp4 = card_video(png, self._card_seconds(), out_path=Path(png).with_suffix(".mp4"))
+        try:
+            Path(png).unlink()
+        except OSError:
+            pass
+        log.debug("card video for %s encoded in %.1fs", clip.title, time.monotonic() - started)
+        return mp4
+
+    def _card_video_for(self, clip):
+        """Card MP4 for ``clip``: prepared in the background, else made now."""
+        key = (clip.brightcove_id, self._card_seconds())
+        with self._card_lock:
+            thread = self._card_threads.get(key)
+        if thread is not None:
+            thread.join(30)
+        with self._card_lock:
+            path = self._card_cache.get(key)
+        if path is not None and Path(path).is_file():
+            return path
+        path = self._make_card_video(clip)
+        with self._card_lock:
+            self._card_cache[key] = path
+        return path
+
+    def _prefetch_next_card(self):
+        """Encode the next clip's card while this one plays (about 1 s of ffmpeg)."""
+        if not (self.options.show_cards and self.options.card_mode == "video" and self._video_cards_ok):
+            return
+        pending = self.queue.pending()
+        if not pending or not pending[0].player_id:
+            return
+        clip = pending[0]
+        key = (clip.brightcove_id, self._card_seconds())
+        with self._card_lock:
+            if key in self._card_cache or key in self._card_threads:
+                return
+
+            def work():
+                try:
+                    path = self._make_card_video(clip)
+                    with self._card_lock:
+                        self._card_cache[key] = path
+                except Exception:  # noqa: BLE001 - made again (or skipped) at play time
+                    log.debug("card prefetch failed", exc_info=True)
+                finally:
+                    with self._card_lock:
+                        self._card_threads.pop(key, None)
+
+            thread = threading.Thread(target=work, name="card-prefetch", daemon=True)
+            self._card_threads[key] = thread
+        thread.start()
+
+    def _drop_card_cache(self, keep=()):
+        keep_names = {Path(k).name for k in keep if k}
+        with self._card_lock:
+            for key, path in list(self._card_cache.items()):
+                if Path(path).name not in keep_names:
+                    self._card_cache.pop(key, None)
+            return [p for p in self._card_cache.values()]
+
+    def _play_with_card_video(self, card, clip):
+        """QUEUE_LOAD [card video, clip]: the receiver goes card -> goal gaplessly.
+
+        Returns True once the receiver plays either item, False when the TV
+        never fetched the card (caller loads the clip directly).
+        """
+        cast = self.cast
+        if cast is None:
+            raise RuntimeError("no Chromecast selected")
+        self._ensure_server()
+        card_url = self.server.url_for(card)
+        name = Path(card).name
+        mc = cast.media_controller
+
+        def item(url, mime, title, preload):
+            return {"media": {"contentId": url, "contentType": mime, "streamType": STREAM_TYPE,
+                              "metadata": {"metadataType": 0, "title": title}},
+                    "autoplay": True, "startTime": 0, "preloadTime": preload}
+
+        message = {
+            "type": "QUEUE_LOAD",
+            "items": [item(card_url, "video/mp4", clip.title, 0),
+                      item(clip.playback_url, clip.mime or "video/mp4", clip.title,
+                           min(3, self._card_seconds()))],
+            "startIndex": 0,
+            "repeatMode": "REPEAT_OFF",
+        }
+        self._load_failed.clear()
+        self._image_session = False
+        log.info("QUEUE_LOAD card video %s + %s %s on %s", describe_url(card_url), clip.mime,
+                 describe_url(clip.playback_url), self.device.name if self.device else "?")
+        mc.send_message(message, inc_session_id=True)
+        started = time.monotonic()
+        deadline = started + ACTIVE_TIMEOUT
+        urls = (card_url, clip.playback_url)
+        while True:
+            if self.stop.is_set():
+                raise RuntimeError("stopping")
+            if self._load_failed.is_set():
+                raise RuntimeError("Chromecast reported LOAD_FAILED")
+            status = self._last_status
+            if status is not None and getattr(status, "content_id", None) in urls:
+                state = getattr(status, "player_state", None)
+                if state and state != "IDLE":
+                    log.info("card video playing (%s) %.1fs after QUEUE_LOAD", state, time.monotonic() - started)
+                    return True
+            now = time.monotonic()
+            if now - started >= CARD_FETCH_TIMEOUT and not self.server.was_fetched(name):
+                self._card_unreachable()
+                return False
+            if now >= deadline:
+                raise TimeoutError("Chromecast did not start the card video within {:.0f}s".format(ACTIVE_TIMEOUT))
+            with self._status_cond:
+                self._status_cond.wait(min(0.25, deadline - now))
+
     def _play_clip(self, clip):
+        if not clip.playback_url:
+            log.info("No playback URL for %s", clip.title)
+            self.queue.mark_failed(clip.brightcove_id)
+            return False
+        self._refresh_rendition(clip)
+        mode = self.options.card_mode if (self.options.show_cards and clip.player_id) else "off"
+        if mode == "video" and not self._video_cards_ok:
+            mode = "image"
+        self._expect_url = clip.playback_url
+        self._clip_playing_seen = False
+        if getattr(clip, "rendition", ""):
+            log.info("casting %s as %s", clip.title, clip.rendition)
         card = None
-        if self.options.show_cards and clip.player_id:
+        loaded = False
+        self._card_hold = 0.0
+        if mode == "video":
+            try:
+                card = self._card_video_for(clip)
+            except CardVideoUnavailable as exc:
+                self._video_cards_ok = False
+                log.warning("video cards unavailable (%s); using image cards", exc)
+                mode = "image"
+            except Exception:
+                log.warning("card video failed; playing the clip without it", exc_info=True)
+            if card is not None:
+                self._reset_receiver_after_image()
+                try:
+                    loaded = self._play_with_card_video(card, clip)
+                    if loaded:
+                        self._card_hold = self._card_seconds()
+                except Exception as exc:  # noqa: BLE001 - load the clip on its own
+                    log.warning("card + clip queue failed (%s); loading the clip directly", exc)
+        if mode == "image":
             try:
                 card, _shown = self._show_card(clip)
             except Exception:
                 log.warning("card failed; playing the clip without it", exc_info=True)
         if self.stop.is_set():
             return False
-        if not clip.playback_url:
-            log.info("No playback URL for %s", clip.title)
-            self.queue.mark_failed(clip.brightcove_id)
-            return False
-        self._refresh_rendition(clip)
-        self._reset_receiver_after_image()
-        try:
-            if getattr(clip, "rendition", ""):
-                log.info("casting %s as %s", clip.title, clip.rendition)
-            self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title)
-        except Exception as exc:
-            self.report_error(ERR_PLAYBACK, "Could not play {}: {}".format(clip.title, exc))
-            self.queue.mark_failed(clip.brightcove_id)
-            return False
+        if not loaded:
+            self._reset_receiver_after_image()
+            try:
+                self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title)
+            except Exception as exc:
+                self.report_error(ERR_PLAYBACK, "Could not play {}: {}".format(clip.title, exc))
+                self.queue.mark_failed(clip.brightcove_id)
+                return False
         self.queue.mark_started(clip)
-        self._started_at = time.monotonic()
+        self._started_at = time.monotonic() + self._card_hold
         self._progress = (None, self._started_at)
         self._idle_shown = False
         self._save_seen()
         try:
-            cleanup_cards(self.overlay_dir, keep=[card] if card else [])
+            keep = self._drop_card_cache(keep=[card] if card else [])
+            cleanup_cards(self.overlay_dir, keep=([card] if card else []) + keep)
         except Exception:
             log.debug("card cleanup failed", exc_info=True)
         log.info("Now playing %s (%s left)", clip.title, self.queue.pending_count())
         self.events.emit(NOW_PLAYING, clip=clip)
         self._set_status("Playing")
+        self._prefetch_next_card()
         return True
 
     def advance(self):
@@ -631,6 +788,9 @@ class NHLVideoPlayer:
 
     def on_media_status(self, status):
         """Every media status from the receiver (pychromecast thread)."""
+        if (getattr(status, "player_state", None) == "PLAYING" and self._expect_url
+                and getattr(status, "content_id", None) == self._expect_url):
+            self._clip_playing_seen = True
         state = getattr(status, "player_state", None)
         reason = getattr(status, "idle_reason", None)
         content = getattr(status, "content_id", None)
@@ -702,6 +862,14 @@ class NHLVideoPlayer:
         def matches(current):
             return not content_id or not current.playback_url or content_id == current.playback_url
 
+        current = self.queue.current
+        if (reason == "FINISHED" and current is not None and self.queue.started
+                and current.playback_url and current.playback_url == self._expect_url
+                and not self._clip_playing_seen):
+            # A queue reports the card's FINISHED with the next item's id
+            # before the clip has started; that is not the clip ending.
+            log.debug("ignoring FINISHED before %s started playing", current.title)
+            return
         clip = self.queue.finish_current(matches)
         if clip is None:
             return

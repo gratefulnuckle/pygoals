@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -285,7 +286,7 @@ def test_cards_are_served_and_old_ones_cleaned(key, tmp_path, monkeypatch):
         def stop(self):
             pass
 
-    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_seconds=0, overlay_path=str(tmp_path)),
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_mode="image", card_seconds=0, overlay_path=str(tmp_path)),
                        fetch_listing=lambda: listing(1, 2), discover=make_discover(FakeCast()),
                        resolve=fake_resolve, card_server_factory=FakeServer)
     try:
@@ -329,7 +330,7 @@ def test_clip_plays_when_card_is_unreachable(key, tmp_path, monkeypatch):
     monkeypatch.setattr(player_mod, "render_card",
                         lambda pid, team, title, out_dir=None: (out_dir / "card-{}-x.png".format(pid)))
     monkeypatch.setattr(player_mod, "CARD_FETCH_TIMEOUT", 0.05)
-    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_seconds=30, overlay_path=str(tmp_path)),
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_mode="image", card_seconds=30, overlay_path=str(tmp_path)),
                        fetch_listing=lambda: listing(1, 2), discover=make_discover(FakeCast()),
                        resolve=fake_resolve, card_server_factory=_UnreachableServer)
     errors = []
@@ -462,7 +463,7 @@ def test_receiver_restarted_between_card_image_and_video(key, tmp_path, monkeypa
         def wait_for_fetch(self, name, timeout, stop=None):
             return True
 
-    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_seconds=0, overlay_path=str(tmp_path)),
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_mode="image", card_seconds=0, overlay_path=str(tmp_path)),
                        fetch_listing=lambda: listing(1), discover=make_discover(cast),
                        resolve=fake_resolve, card_server_factory=Server)
     try:
@@ -555,3 +556,99 @@ def test_available_renditions_falls_back_and_caches(monkeypatch):
     assert live is True and [k for k, _ in options] == ["auto", "mp4:720"]
     again, live = player_mod.available_renditions(player=None, pk="")
     assert live is True and again == options  # cached
+
+
+class _FetchingServer(_UnreachableServer):
+    fetched = True
+
+    def wait_for_fetch(self, name, timeout, stop=None):
+        return self.fetched
+
+    def was_fetched(self, name):
+        return self.fetched
+
+
+def _video_card_player(tmp_path, monkeypatch, cast, server=_FetchingServer, n=2, encode=None):
+    monkeypatch.setattr(player_mod, "render_card",
+                        lambda pid, team, title, out_dir=None: (out_dir / "card-{}-x.png".format(pid)))
+    encoded = []
+
+    def fake_encode(png, seconds, out_path=None, **kw):
+        encoded.append((Path(png).name, seconds))
+        if encode is not None:
+            encode()
+        out_path.write_bytes(b"mp4")
+        return out_path
+
+    monkeypatch.setattr(player_mod, "card_video", fake_encode)
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_mode="video", card_seconds=4, poll_seconds=3600,
+                                     overlay_path=str(tmp_path)),
+                       fetch_listing=lambda: listing(*range(1, n + 1)), discover=make_discover(cast),
+                       resolve=fake_resolve, card_server_factory=server)
+    return p, encoded
+
+
+def test_video_card_queued_with_clip_no_receiver_restart(key, tmp_path, monkeypatch):
+    cast = FakeCast()
+    p, encoded = _video_card_player(tmp_path, monkeypatch, cast)
+    mc = cast.media_controller
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        load = mc.queue_loads[-1]
+        assert load[0] == ("http://192.168.1.10:8765/card-841-x.mp4", "video/mp4")
+        assert load[1] == ("https://cdn.example/bc1.mp4", "video/mp4")
+        assert cast.quit_calls == 0  # no restart between card and clip
+        assert encoded[0] == ("card-841-x.png", 4.0)
+        # the card's FINISHED (reported with the clip's id) must not end the clip
+        mc.queue_advance()
+        assert p.queue.current is not None and p.queue.current.brightcove_id == "bc1"
+        # the next card is encoded in the background while this clip plays
+        assert wait_for(lambda: ("card-842-x.png", 4.0) in encoded)
+        mc.finish(content_id="https://cdn.example/bc1.mp4")
+        assert wait_for(lambda: len(mc.queue_loads) == 2)
+        assert encoded.count(("card-842-x.png", 4.0)) == 1  # prefetched, not encoded twice
+    finally:
+        p.shutdown()
+
+
+def test_video_card_falls_back_to_direct_load_when_not_fetched(key, tmp_path, monkeypatch):
+    monkeypatch.setattr(player_mod, "CARD_FETCH_TIMEOUT", 0.05)
+
+    class Blocked(_FetchingServer):
+        fetched = False
+
+    cast = FakeCast()
+    cast.media_controller.silent_urls.add("http://192.168.1.10:8765/card-841-x.mp4")
+    p, _encoded = _video_card_player(tmp_path, monkeypatch, cast, server=Blocked, n=1)
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(kind))
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        assert cast.media_controller.videos() == ["https://cdn.example/bc1.mp4"]  # plain LOAD
+        assert errors == [player_mod.ERR_CARD_UNREACHABLE]
+    finally:
+        p.shutdown()
+
+
+def test_missing_ffmpeg_falls_back_to_image_cards(key, tmp_path, monkeypatch):
+    from cards import CardVideoUnavailable
+
+    def no_ffmpeg():
+        raise CardVideoUnavailable("ffmpeg not found")
+
+    cast = FakeCast()
+    p, _encoded = _video_card_player(tmp_path, monkeypatch, cast, n=1, encode=no_ffmpeg)
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        played = cast.media_controller.played
+        assert played[0][1] == "image/png" and played[-1] == ("https://cdn.example/bc1.mp4", "video/mp4")
+        assert cast.quit_calls == 1  # image mode restarts the receiver
+        assert p._video_cards_ok is False
+    finally:
+        p.shutdown()

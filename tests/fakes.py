@@ -16,6 +16,7 @@ class FakeMediaController:
         self.fail_urls = set()
         self.silent_urls = set()  # accepted but never reported (receiver ignores it)
         self.kwargs = []
+        self.queue_loads = []
         self.lock = threading.Lock()
         self.update_calls = 0
 
@@ -38,6 +39,31 @@ class FakeMediaController:
 
     def update_status(self, *args, **kwargs):
         self.update_calls += 1
+
+    def send_message(self, data, inc_session_id=False, **kwargs):
+        """QUEUE_LOAD: items are recorded; the first starts playing. The clip
+        (second item) is added to ``played`` so videos() lists it."""
+        assert data.get("type") == "QUEUE_LOAD"
+        items = [(i["media"]["contentId"], i["media"]["contentType"]) for i in data["items"]]
+        with self.lock:
+            self.queue_loads.append(items)
+        first = items[0][0]
+        if first in self.fail_urls:
+            for listener in list(self.listeners):
+                listener.load_media_failed(None, 104)
+            return
+        if first not in self.silent_urls:
+            self.emit(player_state="PLAYING", content_id=first, current_time=0.0)
+
+    def queue_advance(self):
+        """Card item ends: real receivers report FINISHED with the next item's id."""
+        items = self.queue_loads[-1]
+        clip_url, mime = items[1]
+        self.emit(player_state="IDLE", idle_reason="FINISHED", content_id=clip_url)
+        with self.lock:
+            self.played.append((clip_url, mime))
+        self.emit(player_state="BUFFERING", content_id=clip_url, current_time=0.0)
+        self.emit(player_state="PLAYING", content_id=clip_url, current_time=0.0)
 
     def block_until_active(self, timeout=None):
         return None
