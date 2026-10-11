@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -28,7 +29,13 @@ log = logging.getLogger("pygoals.player")
 
 VIDEO_URL = "https://forge-dapi.d3.nhle.com/v2/content/en-US/videos?tags.slug=goal"
 CONNECT_TIMEOUT = 15.0
-ACTIVE_TIMEOUT = 20.0
+ACTIVE_TIMEOUT = 20.0        # s for the receiver to accept a video LOAD
+CARD_FETCH_TIMEOUT = 6.0     # s for the TV to GET the card from our server
+STALL_SECONDS = 25.0         # s stuck BUFFERING without progress => skip
+OVERRUN_GRACE = 45.0         # s past the clip duration => skip
+WATCHDOG_INTERVAL = 2.0
+STATUS_REFRESH = 6.0
+STREAM_TYPE = "BUFFERED"     # VOD clips; pychromecast's default (LIVE) stalls some receivers
 QUIT_TIMEOUT = 5.0
 DISCONNECT_TIMEOUT = 3.0
 
@@ -50,6 +57,19 @@ ERR_NO_DEVICE = "no_device"
 ERR_LOOPBACK = "loopback"
 ERR_NETWORK = "network"
 ERR_PLAYBACK = "playback"
+ERR_CARD_UNREACHABLE = "card_unreachable"
+
+
+def describe_url(url):
+    """Short, token-free description of a media URL for logs."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url))
+    except ValueError:
+        return "?"
+    name = parts.path.rsplit("/", 1)[-1] or parts.path
+    return "{}/…/{}".format(parts.netloc, name) if parts.netloc else name
 
 
 class Events:
@@ -164,6 +184,7 @@ class _AdvanceListenerMixin:
     def new_media_status(self, status):
         if self.cast is not self.player.cast:
             return
+        self.player.on_media_status(status)
         state = getattr(status, "player_state", None)
         reason = str(getattr(status, "idle_reason", "") or "")
         if state == "IDLE" and reason in ("FINISHED", "ERROR"):
@@ -212,6 +233,13 @@ class NHLVideoPlayer:
         self._auth_reported = False
         self._network_reported = False
         self._last_card = None
+        self._status_cond = threading.Condition()
+        self._last_status = None
+        self._status_key = None
+        self._card_warned = False
+        self._watchdog = None
+        self._started_at = 0.0
+        self._progress = (None, 0.0)  # (current_time, monotonic when it last changed)
 
         self.cast = None
         self.device = None
@@ -355,6 +383,7 @@ class NHLVideoPlayer:
             try:
                 cast.media_controller.register_status_listener(self._listener)
             except Exception:
+                self._listener = None
                 log.warning("media status listener not registered; auto-advance disabled", exc_info=True)
             if self.options.show_cards:
                 self._ensure_server()
@@ -367,6 +396,7 @@ class NHLVideoPlayer:
                     )
             self._idle_shown = False
         log.info("Using Chromecast %s (%s)", device.name, device.host)
+        self.start_watchdog()
         self.events.emit(DEVICE, device=device)
         self._set_status("Connected to {}".format(device.name))
         return True
@@ -387,29 +417,85 @@ class NHLVideoPlayer:
         return self.server
 
     # -- playback ----------------------------------------------------------
-    def _play_media(self, url, mime, title=None):
+    def _send_load(self, url, mime, title=None):
         cast = self.cast
         if cast is None:
             raise RuntimeError("no Chromecast selected")
         mc = cast.media_controller
         self._load_failed.clear()
+        kwargs = {"stream_type": STREAM_TYPE}
         if title:
-            mc.play_media(url, mime, title=title)
-        else:
+            kwargs["title"] = title
+        log.info("LOAD %s %s on %s", mime, describe_url(url), self.device.name if self.device else "?")
+        try:
+            mc.play_media(url, mime, **kwargs)
+        except TypeError:  # very old pychromecast without these keywords
             mc.play_media(url, mime)
+        return mc
+
+    def _play_media(self, url, mime, title=None, timeout=ACTIVE_TIMEOUT):
+        """LOAD and wait until the receiver reports this URL as loaded.
+
+        Success means a media status whose content_id is ``url`` and whose
+        state is not IDLE. Raises on LOAD_FAILED, IDLE/ERROR or timeout.
+        Falls back to the session-active event when no listener is wired.
+        """
+        mc = self._send_load(url, mime, title)
+        deadline = time.monotonic() + timeout
+        with_listener = self._listener is not None
         event = getattr(mc, "session_active_event", None)
-        deadline = time.monotonic() + ACTIVE_TIMEOUT
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Chromecast did not start {}".format(mime))
-            mc.block_until_active(timeout=min(0.5, remaining))
-            if event is None or event.is_set():
-                return
-            if self._load_failed.is_set():
-                raise RuntimeError("Chromecast reported load failure")
             if self.stop.is_set():
                 raise RuntimeError("stopping")
+            if self._load_failed.is_set():
+                raise RuntimeError("Chromecast reported LOAD_FAILED")
+            status = self._last_status
+            if with_listener and status is not None and getattr(status, "content_id", None) == url:
+                state = getattr(status, "player_state", None)
+                if state and state != "IDLE":
+                    log.info("loaded %s: %s", describe_url(url), state)
+                    return status
+                if state == "IDLE" and getattr(status, "idle_reason", None) == "ERROR":
+                    raise RuntimeError("Chromecast reported IDLE/ERROR for the media")
+            if not with_listener:
+                mc.block_until_active(timeout=0.5)
+                if event is None or event.is_set():
+                    return None
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Chromecast did not load {} within {:.0f}s".format(mime, timeout))
+            with self._status_cond:
+                self._status_cond.wait(min(0.5, remaining))
+
+    def _show_card(self, clip):
+        """Show the card; returns quickly if the TV can't fetch it."""
+        self._ensure_server()
+        card = render_card(clip.player_id, clip.team, clip.title, out_dir=self.overlay_dir)
+        url = self.server.url_for(card)
+        self._send_load(url, "image/png", clip.title)
+        name = Path(card).name
+        if not self.server.wait_for_fetch(name, CARD_FETCH_TIMEOUT, stop=self.stop):
+            self._card_unreachable()
+            return card, False
+        log.info("card fetched by the Chromecast")
+        if self.options.card_seconds > 0:
+            self.stop.wait(self.options.card_seconds)
+        return card, True
+
+    def _card_unreachable(self):
+        server = self.server
+        where = "http://{}:{}".format(server.host_for_clients, server.port) if server else "this PC"
+        message = (
+            "The TV did not fetch the player card from {} within {:.0f}s, so cards are skipped and "
+            "clips play without them. A firewall (Windows Firewall, Norton or another security "
+            "suite) is probably blocking inbound TCP port {} for this Python ({}). Allow that "
+            "port on private networks, keep a fixed port in Settings, or turn cards off."
+        ).format(where, CARD_FETCH_TIMEOUT, server.port if server else "?", sys.executable)
+        if not self._card_warned:
+            self._card_warned = True
+            self.report_error(ERR_CARD_UNREACHABLE, message)
+        else:
+            log.warning("card not fetched by the Chromecast; skipped")
 
     def _show_idle(self):
         if self._idle_shown or not self.options.show_cards or self.cast is None:
@@ -417,7 +503,7 @@ class NHLVideoPlayer:
         try:
             self._ensure_server()
             path = idle_card(self.overlay_dir)
-            self._play_media(self.server.url_for(path), "image/png", title="pygoals")
+            self._send_load(self.server.url_for(path), "image/png", "pygoals")
             self._idle_shown = True
         except Exception:
             log.warning("idle card failed", exc_info=True)
@@ -426,13 +512,9 @@ class NHLVideoPlayer:
         card = None
         if self.options.show_cards and clip.player_id:
             try:
-                self._ensure_server()
-                card = render_card(clip.player_id, clip.team, clip.title, out_dir=self.overlay_dir)
-                self._play_media(self.server.url_for(card), "image/png", title=clip.title)
-                if self.options.card_seconds > 0:
-                    self.stop.wait(self.options.card_seconds)
+                card, _shown = self._show_card(clip)
             except Exception:
-                log.warning("card failed; playing video", exc_info=True)
+                log.warning("card failed; playing the clip without it", exc_info=True)
         if self.stop.is_set():
             return False
         if not clip.playback_url:
@@ -446,6 +528,8 @@ class NHLVideoPlayer:
             self.queue.mark_failed(clip.brightcove_id)
             return False
         self.queue.mark_started(clip)
+        self._started_at = time.monotonic()
+        self._progress = (None, self._started_at)
         self._idle_shown = False
         self._save_seen()
         try:
@@ -482,6 +566,74 @@ class NHLVideoPlayer:
         thread = threading.Thread(target=self.advance, name="pygoals-advance", daemon=True)
         thread.start()
         return thread
+
+    def on_media_status(self, status):
+        """Every media status from the receiver (pychromecast thread)."""
+        state = getattr(status, "player_state", None)
+        reason = getattr(status, "idle_reason", None)
+        content = getattr(status, "content_id", None)
+        key = (state, reason, content)
+        if key != self._status_key:
+            self._status_key = key
+            current = getattr(status, "current_time", None)
+            duration = getattr(status, "duration", None)
+            log.info(
+                "Chromecast media: %s%s %s t=%s/%s stream=%s",
+                state, "/" + reason if reason else "",
+                describe_url(content) if content else "-",
+                "{:.1f}".format(current) if isinstance(current, (int, float)) else "-",
+                "{:.1f}".format(duration) if isinstance(duration, (int, float)) else "-",
+                getattr(status, "stream_type", "-"),
+            )
+        with self._status_cond:
+            self._last_status = status
+            self._status_cond.notify_all()
+
+    def start_watchdog(self):
+        if self._watchdog is None or not self._watchdog.is_alive():
+            self._watchdog = threading.Thread(target=self._watchdog_loop, name="pygoals-watchdog", daemon=True)
+            self._watchdog.start()
+        return self._watchdog
+
+    def _watchdog_loop(self):
+        last_refresh = 0.0
+        while not self.stop.wait(WATCHDOG_INTERVAL):
+            try:
+                last_refresh = self.check_playback(last_refresh)
+            except Exception:
+                log.debug("watchdog check failed", exc_info=True)
+
+    def check_playback(self, last_refresh=0.0, now=None):
+        """Skip a clip that is stuck buffering or runs far past its length."""
+        now = time.monotonic() if now is None else now
+        clip = self.queue.current
+        if clip is None or not self.queue.started:
+            return last_refresh
+        cast = self.cast
+        if cast is not None and now - last_refresh >= STATUS_REFRESH:
+            try:
+                cast.media_controller.update_status()
+            except Exception:
+                log.debug("update_status failed", exc_info=True)
+            last_refresh = now
+        status = self._last_status
+        reason = None
+        if status is not None and getattr(status, "content_id", None) == clip.playback_url:
+            current = getattr(status, "current_time", None)
+            last_time, since = self._progress
+            if current != last_time:
+                self._progress = (current, now)
+            elif getattr(status, "player_state", None) == "BUFFERING" and now - since >= STALL_SECONDS:
+                reason = "stuck BUFFERING at {}s for {:.0f}s".format(current, now - since)
+        limit = max(30.0, (clip.duration_ms or 0) / 1000.0) + OVERRUN_GRACE
+        if reason is None and now - self._started_at > limit:
+            reason = "still not finished {:.0f}s after start".format(now - self._started_at)
+        if reason:
+            finished = self.queue.finish_current()
+            if finished is not None:
+                self.report_error(ERR_PLAYBACK, "Skipping {}: {}".format(finished.title, reason))
+                self.kick()
+        return last_refresh
 
     def on_clip_ended(self, reason="FINISHED", content_id=None):
         # A late/duplicate FINISHED for an earlier clip must not end this one.
@@ -583,6 +735,8 @@ class NHLVideoPlayer:
             self._shut_down = True
         log.info("Shutting down")
         self.stop.set()
+        with self._status_cond:
+            self._status_cond.notify_all()
         self._poll_now.set()
         self._load_failed.set()
         with self._device_lock:

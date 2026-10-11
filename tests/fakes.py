@@ -14,13 +14,30 @@ class FakeMediaController:
         self.session_active_event = threading.Event()
         self.session_active_event.set()
         self.fail_urls = set()
+        self.silent_urls = set()  # accepted but never reported (receiver ignores it)
+        self.kwargs = []
         self.lock = threading.Lock()
+        self.update_calls = 0
 
     def play_media(self, url, mime, **kwargs):
         if url in self.fail_urls:
             raise RuntimeError("load failed")
         with self.lock:
             self.played.append((url, mime))
+            self.kwargs.append(kwargs)
+        if url not in self.silent_urls:
+            self.emit(player_state="PLAYING", content_id=url, current_time=0.0)
+
+    def emit(self, **fields):
+        status = SimpleNamespace(player_state=None, idle_reason=None, content_id=None, current_time=None,
+                                 duration=None, stream_type="BUFFERED")
+        for key, value in fields.items():
+            setattr(status, key, value)
+        for listener in list(self.listeners):
+            listener.new_media_status(status)
+
+    def update_status(self, *args, **kwargs):
+        self.update_calls += 1
 
     def block_until_active(self, timeout=None):
         return None
@@ -36,9 +53,7 @@ class FakeMediaController:
         if content_id is None:
             videos = self.videos()
             content_id = videos[-1] if videos else None
-        status = SimpleNamespace(player_state="IDLE", idle_reason=reason, content_id=content_id)
-        for listener in list(self.listeners):
-            listener.new_media_status(status)
+        self.emit(player_state="IDLE", idle_reason=reason, content_id=content_id)
 
 
 class FakeCast:

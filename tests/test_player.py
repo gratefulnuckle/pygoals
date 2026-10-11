@@ -259,11 +259,17 @@ def test_cards_are_served_and_old_ones_cleaned(key, tmp_path, monkeypatch):
     monkeypatch.setattr(player_mod, "render_card", fake_render)
 
     class FakeServer:
+        host_for_clients = "192.168.1.10"
+        port = 8765
+
         def __init__(self, directory, port=0):
             self.directory = directory
 
         def start(self):
             return self
+
+        def wait_for_fetch(self, name, timeout, stop=None):
+            return True
 
         def set_client_target(self, host):
             return "192.168.1.10"
@@ -288,3 +294,139 @@ def test_cards_are_served_and_old_ones_cleaned(key, tmp_path, monkeypatch):
     finally:
         p.shutdown()
     assert list(tmp_path.glob("card-*.png")) == []
+
+
+class _UnreachableServer:
+    host_for_clients = "192.168.1.10"
+    port = 8765
+
+    def __init__(self, directory, port=0):
+        self.waits = []
+
+    def start(self):
+        return self
+
+    def set_client_target(self, host):
+        return "192.168.1.10"
+
+    def url_for(self, path):
+        return "http://192.168.1.10:8765/" + path.name
+
+    def wait_for_fetch(self, name, timeout, stop=None):
+        self.waits.append(name)
+        return False  # the TV never GETs the card (firewall)
+
+    def stop(self):
+        pass
+
+
+def test_clip_plays_when_card_is_unreachable(key, tmp_path, monkeypatch):
+    monkeypatch.setattr(player_mod, "render_card",
+                        lambda pid, team, title, out_dir=None: (out_dir / "card-{}-x.png".format(pid)))
+    monkeypatch.setattr(player_mod, "CARD_FETCH_TIMEOUT", 0.05)
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_seconds=30, overlay_path=str(tmp_path)),
+                       fetch_listing=lambda: listing(1, 2), discover=make_discover(FakeCast()),
+                       resolve=fake_resolve, card_server_factory=_UnreachableServer)
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append((kind, message)))
+    try:
+        p.poll_listing()
+        connect(p)
+        started = time.monotonic()
+        assert p.advance() is True
+        assert time.monotonic() - started < 5  # did not sit through card_seconds=30
+        mc = p.cast.media_controller
+        assert mc.videos() == ["https://cdn.example/bc1.mp4"]
+        mc.finish()
+        assert wait_for(lambda: len(mc.videos()) == 2)
+        kinds = [k for k, _ in errors]
+        assert kinds == [player_mod.ERR_CARD_UNREACHABLE]  # toast once, not per clip
+        assert "firewall" in errors[0][1].lower() and "8765" in errors[0][1]
+    finally:
+        p.shutdown()
+
+
+def test_loads_use_buffered_stream_type(key):
+    p, cast = make_player([listing(1)])
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        assert cast.media_controller.kwargs[-1]["stream_type"] == "BUFFERED"
+    finally:
+        p.shutdown()
+
+
+def test_video_load_never_confirmed_skips_to_next(key, monkeypatch):
+    monkeypatch.setattr(player_mod, "ACTIVE_TIMEOUT", 0.3)
+    p, cast = make_player([listing(1, 2)])
+    cast.media_controller.silent_urls.add("https://cdn.example/bc1.mp4")
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(kind))
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        assert cast.media_controller.videos()[-1] == "https://cdn.example/bc2.mp4"
+        assert errors == [player_mod.ERR_PLAYBACK]
+    finally:
+        p.shutdown()
+
+
+def test_watchdog_skips_clip_stuck_buffering(key):
+    p, cast = make_player([listing(1, 2)])
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(message))
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        mc = cast.media_controller
+        url = "https://cdn.example/bc1.mp4"
+        mc.emit(player_state="BUFFERING", content_id=url, current_time=4.176)
+        t0 = p._started_at
+        p.check_playback(now=t0 + 1)
+        p.check_playback(now=t0 + 10)
+        assert len(mc.videos()) == 1  # still within the stall window
+        p.check_playback(now=t0 + 1 + player_mod.STALL_SECONDS + 1)
+        assert wait_for(lambda: len(mc.videos()) == 2)
+        assert "stuck BUFFERING" in errors[0]
+        assert mc.update_calls >= 1  # watchdog asks the receiver for fresh status
+    finally:
+        p.shutdown()
+
+
+def test_watchdog_leaves_progressing_clip_alone(key):
+    p, cast = make_player([listing(1, 2)])
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        mc = cast.media_controller
+        url = "https://cdn.example/bc1.mp4"
+        t0 = p._started_at
+        for step in range(1, 6):
+            mc.emit(player_state="PLAYING", content_id=url, current_time=float(step))
+            p.check_playback(now=t0 + step * 10)
+        assert len(mc.videos()) == 1
+    finally:
+        p.shutdown()
+
+
+def test_media_status_transitions_are_logged(key, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="pygoals.player")
+    p, cast = make_player([listing(1)])
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        cast.media_controller.emit(player_state="BUFFERING", content_id="https://cdn.example/bc1.mp4?token=SECRET",
+                                   current_time=4.2, duration=53.5)
+        text = caplog.text
+        assert "LOAD video/mp4 cdn.example/\u2026/bc1.mp4" in text
+        assert "Chromecast media: BUFFERING" in text and "t=4.2/53.5" in text
+        assert "SECRET" not in text
+    finally:
+        p.shutdown()
