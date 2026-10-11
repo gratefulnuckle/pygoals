@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pygoals"
+dynamic = ["version"]
+description = "NHL goal highlights on a Chromecast, from the Windows system tray."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "PyChromecast>=14.0",
+    "zeroconf>=0.131",
+    "Pillow>=10.1",
+    "PyQt6>=6.5",
+]
+
+[project.optional-dependencies]
+# PyQt6 is a regular dependency now (the tray is the default UI). The extra
+# is kept so `pip install pygoals[tray]` keeps working.
+tray = ["PyQt6>=6.5"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+pygoals-cli = "pygoals:console_entry"
+
+[project.gui-scripts]
+# GUI script: no console window on Windows. Use pygoals-cli for console mode.
+pygoals = "pygoals:console_entry"
+
+[tool.setuptools]
+py-modules = [
+    "pygoals", "_version", "config", "settings", "player", "clip_queue", "nhl_ingest",
+    "brightcove", "cards", "media_server", "team_theme", "http_util",
+    "tray", "tray_style", "tray_widgets", "tray_geometry",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "_version.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

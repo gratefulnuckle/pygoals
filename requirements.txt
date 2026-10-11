@@ -1,5 +1,7 @@
-requests
-pychromecast
-zeroconf
-Pillow
-pytest
+# Runtime dependencies (lower bounds). Dev tools: requirements-dev.txt
+requests>=2.31
+urllib3>=2.0
+PyChromecast>=14.0
+zeroconf>=0.131
+Pillow>=10.1
+PyQt6>=6.5
