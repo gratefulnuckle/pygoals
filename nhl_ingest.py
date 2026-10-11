@@ -18,6 +18,7 @@ class GoalClip:
     duration_ms: int
     playback_url: str | None = None
     mime: str = "video/mp4"
+    rendition: str = ""
 
 
 def _duration_ms(fields):
