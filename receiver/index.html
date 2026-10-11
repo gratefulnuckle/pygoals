@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>pygoals receiver</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="receiver.css">
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body class="idle">
+  <cast-media-player id="player"></cast-media-player>
+
+  <!-- Full-screen player card: shown the moment a goal is loaded (covers buffering). -->
+  <section id="card" aria-hidden="true">
+    <div class="card-bg"></div>
+    <div class="card-stripe"></div>
+    <div class="card-body">
+      <div class="card-left">
+        <div class="headshot-ring"><img id="card-headshot" alt=""></div>
+      </div>
+      <div class="card-right">
+        <div class="card-kicker"><img id="card-logo" alt=""><span id="card-team"></span><span class="dot">&bull;</span><span>GOAL</span></div>
+        <h1 id="card-player"></h1>
+        <div id="card-meta"></div>
+        <p id="card-title"></p>
+      </div>
+    </div>
+    <div class="card-progress"><div id="card-progress-bar"></div></div>
+  </section>
+
+  <!-- Lower third: the card collapses into this once the goal is underway. -->
+  <section id="lower" aria-hidden="true">
+    <div class="lower-accent"></div>
+    <img id="lower-logo" alt="">
+    <div class="lower-text">
+      <div id="lower-player"></div>
+      <div id="lower-title"></div>
+    </div>
+  </section>
+
+  <!-- Idle screen when nothing is queued. -->
+  <section id="idle" aria-hidden="true">
+    <div class="idle-glow"></div>
+    <div class="idle-brand">
+      <div class="idle-puck"></div>
+      <div>
+        <div class="idle-name">pygoals</div>
+        <div class="idle-sub">NHL goals, as they happen</div>
+      </div>
+    </div>
+    <div class="idle-status"><span class="pulse"></span><span id="idle-text">Waiting for goals</span></div>
+    <div id="idle-clock"></div>
+  </section>
+
+  <script src="receiver.js"></script>
+</body>
+</html>
