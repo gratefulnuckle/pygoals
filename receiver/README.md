@@ -21,10 +21,12 @@ Senders LOAD a goal with `media.customData.pygoals`:
 | `primary`, `secondary`, `text`, `accent` | team colours (CSS colours) |
 | `headshot`, `logo` | image URLs |
 | `cardSeconds` | seconds of playback the full card stays up (default 3) |
-| `lowerSeconds` | seconds the lower third stays after that (default 8; 0 = none) |
+| `lowerSeconds` | seconds a lower third stays after that (default 0 = clean video) |
 
 The full card appears as soon as the LOAD/QUEUE_LOAD arrives (it covers buffering),
-stays for `cardSeconds` of playback, then collapses to a lower third. Without
+stays for `cardSeconds` of playback, then fades out to clean video (or to a lower
+third when `lowerSeconds` > 0). The video plays in a plain `<video>` element, so no
+CAF title/metadata overlay is drawn over it. Without
 `customData` the receiver falls back to `metadata.title` / `subtitle` / `images`.
 Nothing queued for a few seconds brings back the idle screen. No custom namespace.
 

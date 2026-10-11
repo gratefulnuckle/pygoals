@@ -8,7 +8,8 @@
   <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
 <body class="idle">
-  <cast-media-player id="player"></cast-media-player>
+  <!-- Plain video element: no built-in CAF title/metadata/progress overlay on the goal. -->
+  <video id="video" playsinline></video>
 
   <!-- Full-screen player card: shown the moment a goal is loaded (covers buffering). -->
   <section id="card" aria-hidden="true">

@@ -7,12 +7,16 @@
  * cardSeconds of playback, then collapses to a lower third. Queue transitions
  * show the next item's card the same way. When nothing is playing for a few
  * seconds the idle screen comes back.
+ *
+ * The goal plays in a plain <video> element (no cast-media-player), so the
+ * receiver draws no title/metadata text over the video. The lower third is
+ * opt-in: lowerSeconds > 0 (pygoals sends 0 unless [cast] video_overlay = on).
  */
 (function () {
   'use strict';
 
   var DEFAULT_CARD_SECONDS = 3;
-  var DEFAULT_LOWER_SECONDS = 8;
+  var DEFAULT_LOWER_SECONDS = 0; // clean video after the card
   var IDLE_DELAY_MS = 2500; // don't flash idle between back-to-back goals
 
   var context = cast.framework.CastReceiverContext.getInstance();
@@ -187,6 +191,8 @@
   }
   tick();
   setInterval(tick, 10000);
+
+  playerManager.setMediaElement(document.getElementById('video'));
 
   var options = new cast.framework.CastReceiverOptions();
   options.disableIdleTimeout = true; // keep the idle screen up between goals
