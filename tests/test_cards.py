@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import pytest
 import io
 from pathlib import Path
@@ -108,3 +109,35 @@ def test_cleanup_removes_card_videos(tmp_path):
         (tmp_path / name).write_bytes(b"x")
     cards.cleanup_cards(tmp_path, keep=["card-2-b.mp4"])
     assert sorted(p.name for p in tmp_path.iterdir()) == ["card-2-b.mp4", "idle.png"]
+
+
+def test_receiver_card_payload(monkeypatch):
+    import cards
+
+    monkeypatch.setattr(cards, "_info_cache", {})
+    calls = []
+
+    def landing(url):
+        calls.append(url)
+        return {"firstName": {"default": "Auston"}, "lastName": {"default": "Matthews"},
+                "sweaterNumber": 34, "position": "C", "headshot": "https://assets.nhle.com/x.png"}
+
+    clip = SimpleNamespace(title="Matthews snipes", team="TOR", player_id="8479318")
+    payload = cards.receiver_card(clip, 3, http_get_json=landing)
+    assert payload["player"] == "Auston Matthews" and payload["number"] == "34" and payload["position"] == "C"
+    assert payload["headshot"] == "https://assets.nhle.com/x.png"
+    assert payload["team"] == "TOR" and payload["primary"].startswith("#") and payload["logo"].startswith("https://")
+    assert payload["cardSeconds"] == 3.0 and payload["title"] == "Matthews snipes"
+    cards.receiver_card(clip, 3, http_get_json=landing)
+    assert len(calls) == 1  # cached
+
+
+def test_receiver_card_without_player_info():
+    import cards
+
+    def broken(url):
+        raise OSError("offline")
+
+    clip = SimpleNamespace(title="Goal", team=None, player_id="1")
+    payload = cards.receiver_card(clip, 0, http_get_json=broken)
+    assert payload["title"] == "Goal" and "player" not in payload and payload["logo"] == ""

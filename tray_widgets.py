@@ -445,6 +445,21 @@ class SettingsDialog(DarkDialog):
                                       stored.poll_seconds, " s")
         form.addRow("Poll every", self.poll_spin)
         self.widgets["poll_seconds"] = self.poll_spin
+        self.receiver_combo = QComboBox()
+        for value, label in (("auto", "Auto \u2014 pygoals receiver if it launches, else default"),
+                             ("custom", "pygoals receiver (HTML cards, no gap)"),
+                             ("default", "Default Media Receiver")):
+            self.receiver_combo.addItem(label, value)
+        self._select(self.receiver_combo, stored.receiver_mode, stored.receiver_mode)
+        form.addRow("Cast receiver", self.receiver_combo)
+        self.widgets["receiver_mode"] = self.receiver_combo
+        self.app_id_edit = QLineEdit(stored.receiver_app_id)
+        self.app_id_edit.setPlaceholderText("Cast app ID, e.g. A7C76189 (blank = default receiver)")
+        self.app_id_edit.setMaxLength(8)
+        self.app_id_edit.setToolTip("Unpublished receivers only run on devices registered as Cast test devices")
+        form.addRow("Receiver app ID", self.app_id_edit)
+        self.widgets["receiver_app_id"] = self.app_id_edit
+
         self.card_mode_combo = QComboBox()
         for value, label in (("video", "Video \u2014 seamless into the goal"),
                              ("image", "Image \u2014 receiver restarts before the goal"),

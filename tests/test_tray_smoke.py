@@ -161,6 +161,8 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     assert not dialog.card_spin.isEnabled()
     dialog.card_mode_combo.setCurrentIndex(dialog.card_mode_combo.findData("image"))
     dialog.card_spin.setValue(3)
+    dialog.receiver_combo.setCurrentIndex(dialog.receiver_combo.findData("custom"))
+    dialog.app_id_edit.setText("a7c76189")
     assert dialog.save() is True
     qapp.processEvents()
     assert controller.player.options.quality == "hls:1080"
@@ -169,3 +171,5 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     text = (isolated_home / "settings.ini").read_text(encoding="utf-8")
     assert "quality = hls:1080" in text and "max_height = 720" in text and "level = DEBUG" in text
     assert "card_mode = image" in text and "card_seconds = 3" in text
+    assert "receiver_mode = custom" in text and "receiver_app_id = A7C76189" in text
+    assert controller.player.options.receiver_app_id == "A7C76189"

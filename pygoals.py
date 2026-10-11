@@ -132,6 +132,8 @@ class Runtime:
             quality=eff.quality,
             show_cards=eff.show_cards,
             card_mode=eff.card_mode,
+            receiver_mode=eff.receiver_mode,
+            receiver_app_id=eff.receiver_app_id,
             port=eff.port,
             known_hosts=list(eff.known_hosts),
             overlay_path=self.args.overlay_path,
@@ -154,6 +156,10 @@ class Runtime:
         options.quality = eff.quality
         options.show_cards = eff.show_cards
         options.card_mode = eff.card_mode
+        if (options.receiver_mode, options.receiver_app_id) != (eff.receiver_mode, eff.receiver_app_id):
+            options.receiver_mode = eff.receiver_mode
+            options.receiver_app_id = eff.receiver_app_id
+            player.reset_receiver_choice()
         options.known_hosts = list(eff.known_hosts)
         if eff.remember_seen and player.seen_store is None:
             player.seen_store = SeenStore(state_path())

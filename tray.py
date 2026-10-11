@@ -36,6 +36,7 @@ ERROR_TITLES = {
     player_mod.ERR_NETWORK: "Network problem",
     player_mod.ERR_PLAYBACK: "Playback problem",
     player_mod.ERR_CARD_UNREACHABLE: "TV can't reach this PC",
+    player_mod.ERR_RECEIVER: "pygoals receiver unavailable",
 }
 REFOCUS_GUARD = 0.35  # s: ignore the tray click that just closed the bar
 
@@ -492,13 +493,14 @@ class TrayApp(QObject):
             return
         self._error_seen[key] = now
         on_click = None
-        if kind in (player_mod.ERR_AUTH, player_mod.ERR_NO_KEY, player_mod.ERR_CARD_UNREACHABLE):
+        if kind in (player_mod.ERR_AUTH, player_mod.ERR_NO_KEY, player_mod.ERR_CARD_UNREACHABLE,
+                    player_mod.ERR_RECEIVER):
             on_click = self.open_settings
         elif kind == player_mod.ERR_NO_DEVICE:
             on_click = self.open_devices
         accent = WARN if kind in (player_mod.ERR_LOOPBACK, player_mod.ERR_NETWORK,
-                                  player_mod.ERR_CARD_UNREACHABLE) else DANGER
-        long_toast = kind == player_mod.ERR_CARD_UNREACHABLE
+                                  player_mod.ERR_CARD_UNREACHABLE, player_mod.ERR_RECEIVER) else DANGER
+        long_toast = kind in (player_mod.ERR_CARD_UNREACHABLE, player_mod.ERR_RECEIVER)
         self.notify(ERROR_TITLES.get(kind, "pygoals"), message, accent,
                     seconds=max(20 if long_toast else 8, self.settings.toast_seconds),
                     on_click=on_click)

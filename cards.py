@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import logging
 import tempfile
 import uuid
@@ -17,7 +18,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from http_util import get_bytes, get_json
-from team_theme import espn_slug, lookup_theme, text_color_for
+from team_theme import accent_on_dark, canonical_team, espn_slug, lookup_theme, text_color_for
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,63 @@ def wrap_text(draw, text, font, max_width, max_lines=TITLE_MAX_LINES):
         kept[-1] = last + "\u2026"
         lines = kept
     return lines
+
+
+_info_cache = {}
+_info_lock = threading.Lock()
+
+
+def _localized(value):
+    if isinstance(value, dict):
+        return str(value.get("default") or next(iter(value.values()), "") or "")
+    return str(value or "")
+
+
+def player_info(player_id, http_get_json=None):
+    """Name, number, position and headshot URL from the NHL landing API (cached)."""
+    if not player_id:
+        return {}
+    key = str(player_id)
+    with _info_lock:
+        if key in _info_cache:
+            return dict(_info_cache[key])
+    info = {}
+    try:
+        landing = (http_get_json or get_json)(PLAYER_URL.format(key))
+        name = " ".join(p for p in (_localized(landing.get("firstName")), _localized(landing.get("lastName"))) if p)
+        info = {
+            "player": name,
+            "number": str(landing.get("sweaterNumber") or ""),
+            "position": str(landing.get("position") or ""),
+            "headshot": str(landing.get("headshot") or ""),
+        }
+    except Exception:  # noqa: BLE001 - the receiver falls back to the title
+        log.debug("player info for %s unavailable", key, exc_info=True)
+        return {}
+    with _info_lock:
+        _info_cache[key] = info
+    return dict(info)
+
+
+def receiver_card(clip, card_seconds=3.0, http_get_json=None):
+    """``customData.pygoals`` for the pygoals Cast receiver (HTML card overlay)."""
+    team = getattr(clip, "team", None)
+    theme = lookup_theme(team)
+    primary, secondary = theme["primary"], theme["secondary"]
+    payload = {
+        "v": 1,
+        "title": getattr(clip, "title", "") or "",
+        "team": canonical_team(team) or "",
+        "teamName": canonical_team(team) or "",
+        "primary": primary,
+        "secondary": secondary,
+        "text": text_color_for(primary),
+        "accent": accent_on_dark(team),
+        "logo": LOGO_URL.format(espn_slug(team)) if team else "",
+        "cardSeconds": round(max(0.0, float(card_seconds or 0)), 1),
+    }
+    payload.update(player_info(getattr(clip, "player_id", None), http_get_json=http_get_json))
+    return payload
 
 
 def fetch_player_art(player_id, team, http_get_json=None, http_get_bytes=None):

@@ -29,15 +29,18 @@ def key():
     set_policy_key("test-key")
 
 
-def make_player(payloads, cast=None, resolve=fake_resolve, **opts):
+def make_player(payloads, cast=None, resolve=fake_resolve, card_server_factory=None, **opts):
     feed = list(payloads)
 
     def fetch():
         return feed.pop(0) if len(feed) > 1 else feed[0]
 
     cast = cast or FakeCast()
-    options = PlayerOptions(show_cards=False, card_seconds=0, poll_seconds=3600, **opts)
-    p = NHLVideoPlayer(options, fetch_listing=fetch, discover=make_discover(cast), resolve=resolve)
+    settings = dict(show_cards=False, card_seconds=0, poll_seconds=3600)
+    settings.update(opts)
+    options = PlayerOptions(**settings)
+    p = NHLVideoPlayer(options, fetch_listing=fetch, discover=make_discover(cast), resolve=resolve,
+                       card_server_factory=card_server_factory)
     return p, cast
 
 
@@ -650,5 +653,91 @@ def test_missing_ffmpeg_falls_back_to_image_cards(key, tmp_path, monkeypatch):
         assert played[0][1] == "image/png" and played[-1] == ("https://cdn.example/bc1.mp4", "video/mp4")
         assert cast.quit_calls == 1  # image mode restarts the receiver
         assert p._video_cards_ok is False
+    finally:
+        p.shutdown()
+
+
+def _custom_player(mode="auto", app="A7C76189", launch_error=None, n=2, **opts):
+    cast = FakeCast()
+    cast.launch_error = launch_error
+    p, cast = make_player([listing(*range(1, n + 1))], cast=cast, receiver_mode=mode, receiver_app_id=app,
+                          show_cards=True, card_server_factory=_FetchingServer, **opts)
+    return p, cast
+
+
+def test_custom_receiver_launched_and_loads_carry_card_data(key, monkeypatch):
+    monkeypatch.setattr(player_mod, "receiver_card", lambda clip, secs, **kw: {
+        "title": clip.title, "player": "Auston Matthews", "headshot": "https://img/h.png", "cardSeconds": secs})
+    p, cast = _custom_player(card_seconds=3)
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        assert cast.started_apps == ["A7C76189"]
+        mc = cast.media_controller
+        assert mc.played == [("https://cdn.example/bc1.mp4", "video/mp4")]  # no card image/video
+        kw = mc.kwargs[-1]
+        assert kw["media_info"]["customData"]["pygoals"]["player"] == "Auston Matthews"
+        assert kw["metadata"]["subtitle"] == "Auston Matthews"
+        assert kw["metadata"]["images"] == [{"url": "https://img/h.png"}]
+        mc.finish()
+        assert wait_for(lambda: len(mc.videos()) == 2)
+        assert cast.started_apps == ["A7C76189"]  # already running: not relaunched
+        assert not mc.queue_loads and cast.quit_calls == 0
+    finally:
+        p.shutdown()
+
+
+def test_auto_falls_back_to_default_receiver_once(key, monkeypatch):
+    monkeypatch.setattr(player_mod, "receiver_card", lambda clip, secs, **kw: {"title": clip.title})
+    monkeypatch.setattr(player_mod, "card_video", lambda png, secs, out_path=None, **kw: out_path)
+    p, cast = _custom_player(launch_error=RuntimeError("Failed to execute start app A7C76189"), card_mode="off")
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append((kind, message)))
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        assert cast.started_apps == ["A7C76189"]
+        assert cast.media_controller.videos() == ["https://cdn.example/bc1.mp4"]
+        assert "media_info" not in cast.media_controller.kwargs[-1]
+        cast.media_controller.finish()
+        assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
+        assert cast.started_apps == ["A7C76189"]  # auto: not retried for every goal
+        assert [k for k, _ in errors] == [player_mod.ERR_RECEIVER]
+        assert "registered" in errors[0][1] and "default receiver" in errors[0][1]
+        p.reset_receiver_choice()  # e.g. settings saved
+        assert p.wants_custom_receiver() is True
+    finally:
+        p.shutdown()
+
+
+def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
+    p, cast = _custom_player(mode="custom", launch_error=TimeoutError("start app timed out"), card_mode="off")
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(kind))
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        cast.media_controller.finish()
+        assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
+        assert cast.started_apps == ["A7C76189", "A7C76189"]
+        assert errors == [player_mod.ERR_RECEIVER]
+    finally:
+        p.shutdown()
+
+
+@pytest.mark.parametrize("mode,app,expected", [
+    ("default", "A7C76189", False),
+    ("auto", "", False),
+    ("custom", "", False),
+    ("auto", "A7C76189", True),
+    ("custom", "A7C76189", True),
+])
+def test_receiver_selection(key, mode, app, expected):
+    p, cast = _custom_player(mode=mode, app=app, card_mode="off")
+    try:
+        assert p.wants_custom_receiver() is expected
     finally:
         p.shutdown()

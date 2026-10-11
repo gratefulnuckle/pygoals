@@ -90,6 +90,9 @@ class FakeCast:
         self.quit_calls = 0
         self.disconnect_calls = 0
         self.wait_error = None
+        self.app_id = None
+        self.started_apps = []
+        self.launch_error = None
 
     def wait(self, timeout=None):
         if self.wait_error:
@@ -97,6 +100,13 @@ class FakeCast:
 
     def quit_app(self, timeout=None):
         self.quit_calls += 1
+        self.app_id = None
+
+    def start_app(self, app_id, force_launch=False, timeout=10.0):
+        self.started_apps.append(app_id)
+        if self.launch_error is not None:
+            raise self.launch_error
+        self.app_id = app_id
 
     def disconnect(self, timeout=None):
         self.disconnect_calls += 1

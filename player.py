@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 from brightcove import PolicyKeyError, policy_key, resolve_clip
-from cards import CardVideoUnavailable, card_video, cleanup_cards, idle_card, render_card
+from cards import CardVideoUnavailable, card_video, cleanup_cards, idle_card, receiver_card, render_card
 from clip_queue import ClipQueue
 from http_util import get_json
 from media_server import CardServer, is_loopback
@@ -60,6 +60,8 @@ ERR_LOOPBACK = "loopback"
 ERR_NETWORK = "network"
 ERR_PLAYBACK = "playback"
 ERR_CARD_UNREACHABLE = "card_unreachable"
+ERR_RECEIVER = "receiver"
+CUSTOM_LAUNCH_TIMEOUT = 15.0
 
 
 def describe_url(url):
@@ -109,6 +111,8 @@ class PlayerOptions:
     quality: str = "auto"
     show_cards: bool = True
     card_mode: str = "video"  # video | image (off is show_cards=False)
+    receiver_mode: str = "auto"  # auto | custom | default
+    receiver_app_id: str = ""
     port: int = 0
     known_hosts: list = field(default_factory=list)
     overlay_path: str | None = None
@@ -250,6 +254,8 @@ class NHLVideoPlayer:
         self._card_threads = {}
         self._video_cards_ok = True
         self._card_hold = 0.0
+        self._custom_failed = False  # auto mode: custom receiver didn't launch on this device
+        self._receiver_warned = False
         self._watchdog = None
         self._started_at = 0.0
         self._progress = (None, 0.0)  # (current_time, monotonic when it last changed)
@@ -389,6 +395,8 @@ class NHLVideoPlayer:
                 self._release_cast(old_cast)
             self.cast = cast
             self.device = device
+            self._custom_failed = False  # another TV may be a registered test device
+            self._receiver_warned = False
             # A receiver left over from an earlier run may be stuck on an image
             # or a frozen video; start the first clip in a fresh one.
             self._image_session = getattr(cast, "app_id", None) == DEFAULT_RECEIVER_APP_ID
@@ -435,7 +443,7 @@ class NHLVideoPlayer:
         return self.server
 
     # -- playback ----------------------------------------------------------
-    def _send_load(self, url, mime, title=None):
+    def _send_load(self, url, mime, title=None, extra=None):
         cast = self.cast
         if cast is None:
             raise RuntimeError("no Chromecast selected")
@@ -444,6 +452,8 @@ class NHLVideoPlayer:
         kwargs = {"stream_type": STREAM_TYPE}
         if title:
             kwargs["title"] = title
+        if extra:
+            kwargs.update(extra)
         log.info("LOAD %s %s on %s", mime, describe_url(url), self.device.name if self.device else "?")
         self._image_session = str(mime).startswith("image/")
         try:
@@ -452,14 +462,14 @@ class NHLVideoPlayer:
             mc.play_media(url, mime)
         return mc
 
-    def _play_media(self, url, mime, title=None, timeout=ACTIVE_TIMEOUT):
+    def _play_media(self, url, mime, title=None, timeout=ACTIVE_TIMEOUT, extra=None):
         """LOAD and wait until the receiver reports this URL as loaded.
 
         Success means a media status whose content_id is ``url`` and whose
         state is not IDLE. Raises on LOAD_FAILED, IDLE/ERROR or timeout.
         Falls back to the session-active event when no listener is wired.
         """
-        mc = self._send_load(url, mime, title)
+        mc = self._send_load(url, mime, title, extra=extra)
         deadline = time.monotonic() + timeout
         with_listener = self._listener is not None
         event = getattr(mc, "session_active_event", None)
@@ -518,6 +528,9 @@ class NHLVideoPlayer:
 
     def _show_idle(self):
         if self._idle_shown or not self.options.show_cards or self.cast is None:
+            return
+        if self.custom_receiver_running():
+            self._idle_shown = True  # the pygoals receiver shows its own idle screen
             return
         try:
             self._ensure_server()
@@ -609,6 +622,8 @@ class NHLVideoPlayer:
         """Encode the next clip's card while this one plays (about 1 s of ffmpeg)."""
         if not (self.options.show_cards and self.options.card_mode == "video" and self._video_cards_ok):
             return
+        if self.wants_custom_receiver() and self.custom_receiver_running():
+            return
         pending = self.queue.pending()
         if not pending or not pending[0].player_id:
             return
@@ -696,13 +711,83 @@ class NHLVideoPlayer:
             with self._status_cond:
                 self._status_cond.wait(min(0.25, deadline - now))
 
+    # -- receiver selection -------------------------------------------------------
+    def reset_receiver_choice(self):
+        """Settings changed: try the custom receiver again on the next clip."""
+        self._custom_failed = False
+        self._receiver_warned = False
+
+    def wants_custom_receiver(self):
+        mode = (self.options.receiver_mode or "auto").lower()
+        if mode == "default" or not self.options.receiver_app_id:
+            return False
+        if mode == "auto" and self._custom_failed:
+            return False
+        return True
+
+    def custom_receiver_running(self):
+        app = self.options.receiver_app_id
+        return bool(app) and self.cast is not None and getattr(self.cast, "app_id", None) == app
+
+    def _ensure_custom_receiver(self):
+        """Launch the pygoals receiver unless it is already up. False on failure."""
+        cast = self.cast
+        if cast is None:
+            return False
+        app = self.options.receiver_app_id
+        if self.custom_receiver_running():
+            return True
+        log.info("launching the pygoals Cast receiver %s on %s", app, self.device.name if self.device else "?")
+        started = time.monotonic()
+        try:
+            cast.start_app(app, timeout=CUSTOM_LAUNCH_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001 - RequestFailed / RequestTimeout / socket errors
+            self._custom_receiver_failed(exc)
+            return False
+        log.info("pygoals receiver %s running (%.1fs)", app, time.monotonic() - started)
+        self._image_session = False
+        self._idle_shown = False
+        return True
+
+    def _custom_receiver_failed(self, exc):
+        app = self.options.receiver_app_id
+        auto = (self.options.receiver_mode or "auto").lower() == "auto"
+        if auto:
+            self._custom_failed = True
+        detail = str(exc) or type(exc).__name__
+        log.warning("pygoals receiver %s did not launch: %s", app, detail)
+        if self._receiver_warned:
+            return
+        self._receiver_warned = True
+        device = self.device.name if self.device else "the TV"
+        message = (
+            "The pygoals Cast receiver (app {}) didn't start on {} ({}). {} An unpublished "
+            "receiver only runs on devices registered as Cast test devices (Cast SDK Developer "
+            "Console > add the serial number; it can take ~15 minutes and a device reboot)."
+        ).format(app, device, detail,
+                 "Using the default receiver with video cards instead." if auto
+                 else "Playing on the default receiver for now; it will be tried again for each goal.")
+        self.report_error(ERR_RECEIVER, message)
+
     def _play_clip(self, clip):
         if not clip.playback_url:
             log.info("No playback URL for %s", clip.title)
             self.queue.mark_failed(clip.brightcove_id)
             return False
         self._refresh_rendition(clip)
-        mode = self.options.card_mode if (self.options.show_cards and clip.player_id) else "off"
+        custom = self.wants_custom_receiver() and self._ensure_custom_receiver()
+        extra = None
+        if custom:
+            payload = receiver_card(clip, self.options.card_seconds if self.options.show_cards else 0)
+            if not self.options.show_cards:
+                payload = {"title": clip.title, "cardSeconds": 0, "lowerSeconds": 0}
+            metadata = {"metadataType": 0, "title": clip.title}
+            if payload.get("player"):
+                metadata["subtitle"] = payload["player"]
+            if payload.get("headshot"):
+                metadata["images"] = [{"url": payload["headshot"]}]
+            extra = {"media_info": {"customData": {"pygoals": payload}}, "metadata": metadata}
+        mode = self.options.card_mode if (self.options.show_cards and clip.player_id and not custom) else "off"
         if mode == "video" and not self._video_cards_ok:
             mode = "image"
         self._expect_url = clip.playback_url
@@ -737,9 +822,10 @@ class NHLVideoPlayer:
         if self.stop.is_set():
             return False
         if not loaded:
-            self._reset_receiver_after_image()
+            if not custom:
+                self._reset_receiver_after_image()
             try:
-                self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title)
+                self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title, extra=extra)
             except Exception as exc:
                 self.report_error(ERR_PLAYBACK, "Could not play {}: {}".format(clip.title, exc))
                 self.queue.mark_failed(clip.brightcove_id)
@@ -754,7 +840,8 @@ class NHLVideoPlayer:
             cleanup_cards(self.overlay_dir, keep=([card] if card else []) + keep)
         except Exception:
             log.debug("card cleanup failed", exc_info=True)
-        log.info("Now playing %s (%s left)", clip.title, self.queue.pending_count())
+        log.info("Now playing %s (%s left)%s", clip.title, self.queue.pending_count(),
+                 " on the pygoals receiver" if custom else "")
         self.events.emit(NOW_PLAYING, clip=clip)
         self._set_status("Playing")
         self._prefetch_next_card()

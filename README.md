@@ -150,6 +150,40 @@ Player cards come in three styles (`[playback] card_mode`, also in Settings as
 at least 1 s). A watchdog polls the receiver every few seconds and skips a clip
 whose position stops advancing for 25 s or that runs well past its length.
 
+## pygoals Cast receiver (optional)
+
+`receiver/` holds a Google Cast Web Receiver (CAF v3, static HTML/CSS/JS) that
+plays the goal and draws the player card as an HTML overlay: headshot, team
+logo and colours, scorer and title. The card appears the instant a goal is
+loaded (it covers buffering), stays for the card duration, then shrinks to a
+lower third, so there is no gap and no PNG/MP4 card is generated. When nothing
+is queued it shows a pygoals idle screen. It is published at
+https://gratefulnuckle.github.io/pygoals-receiver/ (mirror repo
+`gratefulnuckle/pygoals-receiver`, GitHub Pages) and registered as Cast app
+`A7C76189`.
+
+The app is unpublished, so it only launches on devices registered as test
+devices in the [Cast SDK Developer Console](https://cast.google.com/publish/)
+(add the device serial number, then allow ~15 minutes and reboot the device).
+Others can register their own receiver URL and put that app ID in settings.
+
+```ini
+[cast]
+receiver_mode = auto        ; auto | custom | default
+receiver_app_id = A7C76189  ; blank = always the Default Media Receiver
+```
+
+* `auto`: launch the pygoals receiver when an app ID is set; if it can't launch
+  (device not registered, timeout) show one notification and keep using the
+  Default Media Receiver with video cards until settings change or another TV
+  is picked.
+* `custom`: always try the pygoals receiver (retried for each goal; falls back
+  to the default receiver for that goal).
+* `default`: never use it.
+
+Both are in Settings ("Cast receiver", "Receiver app ID"). Loads carry
+`media.customData.pygoals` (see `receiver/README.md`).
+
 ## Troubleshooting: the TV shows a blank receiver / no player cards
 
 Player cards are PNGs that the Chromecast downloads from a small web server

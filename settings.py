@@ -43,6 +43,9 @@ class Settings:
     quality: str = "auto"
     card_mode: str = "video"
     remember_seen: bool = True
+    # [cast]
+    receiver_mode: str = "auto"
+    receiver_app_id: str = ""
     # [server]
     port: int = 8765
     # [ui]
@@ -85,6 +88,8 @@ SCHEMA = (
     ("playback", "max_height", "max_height", "height"),
     ("playback", "card_mode", "card_mode", "cardmode"),
     ("playback", "remember_seen", "remember_seen", "bool"),
+    ("cast", "receiver_mode", "receiver_mode", "recvmode"),
+    ("cast", "receiver_app_id", "receiver_app_id", "appid"),
     ("server", "port", "port", "port"),
     ("ui", "snap_to_tray", "snap_to_tray", "bool"),
     ("ui", "bar_x", "bar_x", "optint"),
@@ -101,6 +106,9 @@ COMMENTS = {
     "brightcove": "Brightcove player policy key. BRIGHTCOVE_PK in the environment or .env overrides this.",
     "device": "Active Chromecast. Set from the Devices page; uuid is matched first, then name, then host.",
     "playback": "poll_seconds: 5-3600. card_mode: video (card plays as a short clip right before the goal, seamless), image (still card; the receiver restarts before the goal) or off. card_seconds: 0-30 (video cards last at least 1 s). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
+    "cast": ("Which Cast receiver plays the goals. receiver_mode: auto (pygoals receiver if receiver_app_id is set "
+             "and it launches, else the default receiver), custom (always the pygoals receiver) or default. "
+             "receiver_app_id: 8-character Cast app ID, e.g. A7C76189 (unpublished apps only run on registered test devices)."),
     "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",
     "ui": "Media bar position. snap_to_tray = true ignores bar_x/bar_y and anchors above the tray icon.",
     "notifications": "Dark toast notifications above the tray. toast_seconds: 2-60.",
@@ -115,12 +123,16 @@ ENV_OVERRIDES = {
     "PYGOALS_PORT": "port",
     "PYGOALS_MAX_HEIGHT": "max_height",
     "PYGOALS_QUALITY": "quality",
+    "PYGOALS_RECEIVER_MODE": "receiver_mode",
+    "PYGOALS_RECEIVER_APP_ID": "receiver_app_id",
     "PYGOALS_LOG_LEVEL": "log_level",
 }
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,252})$|^[0-9A-Fa-f:]+$")
 _QUALITY_RE = re.compile(r"^(auto|hls:adaptive|(hls|mp4):[0-9]{3,4})$")
 CARD_MODES = ("video", "image", "off")
+RECEIVER_MODES = ("auto", "custom", "default")
+_APP_ID_RE = re.compile(r"^[0-9A-Z]{8}$")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -164,6 +176,16 @@ def _convert(kind, raw):
             raise ValueError("expected a whole number 0-65535") from None
         if not 0 <= value <= 65535:
             raise ValueError("must be 0-65535")
+        return value
+    if kind == "recvmode":
+        value = (text or "auto").lower()
+        if value not in RECEIVER_MODES:
+            raise ValueError("must be one of " + ", ".join(RECEIVER_MODES))
+        return value
+    if kind == "appid":
+        value = text.upper()
+        if value and not _APP_ID_RE.match(value):
+            raise ValueError("expected an 8-character Cast app ID (letters/digits) or blank")
         return value
     if kind == "cardmode":
         value = (text or "video").lower()
