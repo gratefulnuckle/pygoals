@@ -9,6 +9,11 @@ __pycache__/
 venv/
 .env
 
+# Portable runtime files written next to the app
+settings.ini
+state.json
+logs/
+
 # Build output
 build/
 dist/
