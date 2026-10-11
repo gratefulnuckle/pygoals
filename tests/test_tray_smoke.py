@@ -135,3 +135,30 @@ def test_quit_is_clean(controller, qapp):
     controller.quit()
     qapp.processEvents()
     assert not controller.playbar.isVisible()
+
+
+def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolated_home, monkeypatch):
+    import time as _time
+
+    import player as player_mod
+
+    offered = [("auto", "Auto (best compatible)"), ("hls:1080", "HLS 1080p"), ("mp4:720", "MP4 720p"),
+               ("hls:adaptive", "HLS adaptive")]
+    monkeypatch.setattr(player_mod, "available_renditions", lambda **kw: (offered, True))
+    dialog = controller.open_settings()
+    deadline = _time.monotonic() + 5
+    while dialog.quality_combo.count() != len(offered) and _time.monotonic() < deadline:
+        qapp.processEvents()
+        _time.sleep(0.02)
+    labels = [dialog.quality_combo.itemText(i) for i in range(dialog.quality_combo.count())]
+    assert labels == [label for _key, label in offered]
+    assert "recent goal" in dialog.quality_note.text()
+    dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData("hls:1080"))
+    dialog.height_combo.setCurrentIndex(dialog.height_combo.findData("720"))
+    dialog.level_combo.setCurrentIndex(dialog.level_combo.findData("DEBUG"))
+    assert dialog.save() is True
+    qapp.processEvents()
+    assert controller.player.options.quality == "hls:1080"
+    assert controller.player.options.max_height == 720
+    text = (isolated_home / "settings.ini").read_text(encoding="utf-8")
+    assert "quality = hls:1080" in text and "max_height = 720" in text and "level = DEBUG" in text

@@ -110,6 +110,34 @@ defaults.** Environment variables: `BRIGHTCOVE_PK`, `PYGOALS_DEVICE`,
 `PYGOALS_KNOWN_HOSTS`, `PYGOALS_POLL_SECONDS`, `PYGOALS_PORT`,
 `PYGOALS_LOG_LEVEL`. `PYGOALS_HOME` moves the whole data folder (used by tests).
 
+## Video quality and the receiver
+
+Brightcove offers each goal as a progressive MP4 (usually only 720p) and as an
+HLS ladder up to 1080p. pygoals reads the HLS master playlist and casts the
+tallest **H.264** rendition no taller than `[playback] max_height` (default
+`1080`, also in Settings as "Max video height"); HEVC/AV1/VP9 rungs are
+skipped. If the HLS ladder is unavailable it falls back to the best MP4. The
+chosen rendition is logged (`rendition for ...: HLS 1920x1080 4.1 Mbps ...`).
+
+To force a specific rendition, open Settings > **Video quality**. The dropdown
+lists what Brightcove actually offers for a recent goal (fetched when the
+dialog opens, cached for a few hours; a typical NHL list is shown when
+offline), e.g. `HLS 1080p - 1920x1080 - H.264 High - 4.1 Mbps`,
+`MP4 720p`, `HLS 540p`, ..., `HLS adaptive (receiver chooses)`, plus
+`Auto (best compatible)`. It is saved as `[playback] quality` (`auto`,
+`hls:1080`, `mp4:720`, `hls:adaptive`, ...); if a clip lacks that rung the next
+lower one is used. Changes apply to the next clip, including ones already
+queued. Settings with a fixed set of values (video quality, auto max height,
+log level) are dropdowns.
+
+Some Google TV devices (seen on an onn 4K Pro) play only the audio of a video
+that is loaded into a Default Media Receiver session that was showing an image
+(the player card); the clock freezes a few seconds in. pygoals therefore
+restarts the receiver between the card and the clip (the TV shows the cast
+backdrop for a moment). A watchdog polls the receiver every few seconds and
+skips a clip whose position stops advancing for 25 s or that runs well past its
+length.
+
 ## Troubleshooting: the TV shows a blank receiver / no player cards
 
 Player cards are PNGs that the Chromecast downloads from a small web server

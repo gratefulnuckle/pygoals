@@ -286,7 +286,8 @@ class TrayApp(QObject):
             self._settings_dialog.activateWindow()
             return self._settings_dialog
         dialog = SettingsDialog(self.runtime.stored, self.runtime.settings_path,
-                                key_from_env=settings_mod.key_from_environment())
+                                key_from_env=settings_mod.key_from_environment(),
+                                rendition_loader=self._rendition_loader)
         dialog.saved.connect(self.apply_settings)
         dialog.open_devices.connect(self.open_devices)
         dialog.open_file.connect(lambda: QDesktopServices.openUrl(
@@ -294,10 +295,15 @@ class TrayApp(QObject):
         dialog.finished.connect(lambda _r: setattr(self, "_settings_dialog", None))
         self._settings_dialog = dialog
         self._center(dialog)
+        dialog.load_renditions()
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         return dialog
+
+    def _rendition_loader(self):
+        return player_mod.available_renditions(pk=self.runtime.effective().policy_key or None,
+                                               player=self.player)
 
     def open_devices(self):
         if self._devices_dialog is not None:

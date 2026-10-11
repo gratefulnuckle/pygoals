@@ -128,6 +128,8 @@ class Runtime:
         return PlayerOptions(
             poll_seconds=eff.poll_seconds,
             card_seconds=eff.card_seconds,
+            max_height=eff.max_height,
+            quality=eff.quality,
             show_cards=eff.show_cards,
             port=eff.port,
             known_hosts=list(eff.known_hosts),
@@ -147,6 +149,8 @@ class Runtime:
         options = player.options
         options.poll_seconds = eff.poll_seconds
         options.card_seconds = eff.card_seconds
+        options.max_height = eff.max_height
+        options.quality = eff.quality
         options.show_cards = eff.show_cards
         options.known_hosts = list(eff.known_hosts)
         if eff.remember_seen and player.seen_store is None:

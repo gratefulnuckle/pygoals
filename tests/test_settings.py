@@ -132,3 +132,19 @@ def test_log_file_is_utf8_with_bom_and_rolls_old_files(tmp_path):
         if getattr(handler, "_pygoals", False):
             logging.getLogger().removeHandler(handler)
             handler.close()
+
+
+def test_max_height_setting():
+    assert s.Settings().max_height == 1080
+    assert "max_height = 1080" in s.to_text(s.Settings())
+    assert s.validate_values({"max_height": "720"}).max_height == 720
+    with pytest.raises(s.SettingsError):
+        s.validate_values({"max_height": "100"})
+
+
+def test_quality_setting():
+    assert s.Settings().quality == "auto"
+    assert s.validate_values({"quality": "HLS:1080"}).quality == "hls:1080"
+    assert s.validate_values({"quality": "hls:adaptive"}).quality == "hls:adaptive"
+    with pytest.raises(s.SettingsError):
+        s.validate_values({"quality": "best"})

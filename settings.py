@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 MIN_POLL_SECONDS = 5.0
+MIN_HEIGHT = 240
+MAX_HEIGHT = 2160
 MAX_POLL_SECONDS = 3600.0
 
 
@@ -37,6 +39,8 @@ class Settings:
     # [playback]
     poll_seconds: float = 60.0
     card_seconds: float = 4.0
+    max_height: int = 1080
+    quality: str = "auto"
     show_cards: bool = True
     remember_seen: bool = True
     # [server]
@@ -73,6 +77,8 @@ SCHEMA = (
     ("device", "known_hosts", "known_hosts", "hosts"),
     ("playback", "poll_seconds", "poll_seconds", "poll"),
     ("playback", "card_seconds", "card_seconds", "card"),
+    ("playback", "quality", "quality", "quality"),
+    ("playback", "max_height", "max_height", "height"),
     ("playback", "show_cards", "show_cards", "bool"),
     ("playback", "remember_seen", "remember_seen", "bool"),
     ("server", "port", "port", "port"),
@@ -90,7 +96,7 @@ SCHEMA = (
 COMMENTS = {
     "brightcove": "Brightcove player policy key. BRIGHTCOVE_PK in the environment or .env overrides this.",
     "device": "Active Chromecast. Set from the Devices page; uuid is matched first, then name, then host.",
-    "playback": "poll_seconds: 5-3600. card_seconds: 0-30 (0 = no pause on the card).",
+    "playback": "poll_seconds: 5-3600. card_seconds: 0-30 (0 = no pause on the card). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
     "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",
     "ui": "Media bar position. snap_to_tray = true ignores bar_x/bar_y and anchors above the tray icon.",
     "notifications": "Dark toast notifications above the tray. toast_seconds: 2-60.",
@@ -103,10 +109,13 @@ ENV_OVERRIDES = {
     "PYGOALS_KNOWN_HOSTS": "known_hosts",
     "PYGOALS_POLL_SECONDS": "poll_seconds",
     "PYGOALS_PORT": "port",
+    "PYGOALS_MAX_HEIGHT": "max_height",
+    "PYGOALS_QUALITY": "quality",
     "PYGOALS_LOG_LEVEL": "log_level",
 }
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,252})$|^[0-9A-Fa-f:]+$")
+_QUALITY_RE = re.compile(r"^(auto|hls:adaptive|(hls|mp4):[0-9]{3,4})$")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -150,6 +159,19 @@ def _convert(kind, raw):
             raise ValueError("expected a whole number 0-65535") from None
         if not 0 <= value <= 65535:
             raise ValueError("must be 0-65535")
+        return value
+    if kind == "quality":
+        value = (text or "auto").lower()
+        if not _QUALITY_RE.match(value):
+            raise ValueError("expected auto, hls:<height>, mp4:<height> or hls:adaptive")
+        return value
+    if kind == "height":
+        try:
+            value = int(float(text or "1080"))
+        except ValueError:
+            raise ValueError("expected a whole number 240-2160") from None
+        if not MIN_HEIGHT <= value <= MAX_HEIGHT:
+            raise ValueError("must be {}-{}".format(MIN_HEIGHT, MAX_HEIGHT))
         return value
     if kind == "level":
         upper = (text or "INFO").upper()

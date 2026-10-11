@@ -3,6 +3,7 @@ Devices pages. No player logic here; ``tray.TrayApp`` wires them up."""
 
 from __future__ import annotations
 
+import threading
 import time
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, QTimer, pyqtSignal
@@ -14,6 +15,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import brightcove as brightcove_mod
 import settings as settings_mod
 from tray_style import ACCENT, DANGER, MUTED, glyph_icon, rounded_pixmap
 
@@ -392,9 +394,12 @@ class SettingsDialog(DarkDialog):
     open_devices = pyqtSignal()
     open_file = pyqtSignal()
 
-    def __init__(self, stored, path, key_from_env=False, parent=None):
+    renditions_loaded = pyqtSignal(object, bool)
+
+    def __init__(self, stored, path, key_from_env=False, parent=None, rendition_loader=None):
         super().__init__("Settings", parent)
         self.stored = stored
+        self._rendition_loader = rendition_loader
         self.path = path
         form = QFormLayout()
         form.setHorizontalSpacing(14)
@@ -443,6 +448,26 @@ class SettingsDialog(DarkDialog):
         self.card_spin = self._double(0, 30, stored.card_seconds, " s")
         form.addRow("Card time", self.card_spin)
         self.widgets["card_seconds"] = self.card_spin
+        self.quality_combo = QComboBox()
+        self.quality_combo.setToolTip("Renditions Brightcove offers for NHL goals (H.264 only)")
+        self._fill_quality(brightcove_mod.STATIC_OPTIONS)
+        quality_box = QVBoxLayout()
+        quality_box.setSpacing(2)
+        quality_box.addWidget(self.quality_combo)
+        self.quality_note = QLabel("Typical NHL renditions" if rendition_loader is None
+                                   else "Loading the renditions Brightcove offers\u2026")
+        self.quality_note.setObjectName("Hint")
+        quality_box.addWidget(self.quality_note)
+        form.addRow("Video quality", quality_box)
+        self.widgets["quality"] = self.quality_combo
+
+        self.height_combo = QComboBox()
+        for height in ("2160", "1440", "1080", "720", "540", "360"):
+            self.height_combo.addItem("{}p".format(height), height)
+        self._select(self.height_combo, str(stored.max_height), "{}p".format(stored.max_height))
+        self.height_combo.setToolTip("Auto picks the tallest H.264 rendition up to this height")
+        form.addRow("Auto max height", self.height_combo)
+        self.widgets["max_height"] = self.height_combo
         self.show_cards = self._check("Show player card before each clip", stored.show_cards)
         form.addRow("", self.show_cards)
         self.widgets["show_cards"] = self.show_cards
@@ -474,8 +499,9 @@ class SettingsDialog(DarkDialog):
         self.widgets["toast_seconds"] = self.toast_spin
 
         self.level_combo = QComboBox()
-        self.level_combo.addItems(settings_mod.LOG_LEVELS)
-        self.level_combo.setCurrentText(stored.log_level)
+        for level in settings_mod.LOG_LEVELS:
+            self.level_combo.addItem(level, level)
+        self._select(self.level_combo, stored.log_level, stored.log_level)
         form.addRow("Log level", self.level_combo)
         self.widgets["log_level"] = self.level_combo
         self.log_file = self._check("Write logs/pygoals.log", stored.log_to_file)
@@ -511,6 +537,50 @@ class SettingsDialog(DarkDialog):
         self.setMinimumWidth(500)
 
     @staticmethod
+    def _select(combo, value, label):
+        index = combo.findData(value)
+        if index < 0:
+            combo.addItem(label, value)
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+
+    def _fill_quality(self, options):
+        current = self.quality_combo.currentData() or self.stored.quality
+        self.quality_combo.blockSignals(True)
+        self.quality_combo.clear()
+        for key, label in options:
+            self.quality_combo.addItem(label, key)
+        if self.quality_combo.findData(current) < 0:
+            self.quality_combo.addItem("{} (not offered right now)".format(current), current)
+        self.quality_combo.setCurrentIndex(self.quality_combo.findData(current))
+        self.quality_combo.blockSignals(False)
+
+    def _on_renditions(self, options, live):
+        if options:
+            self._fill_quality(options)
+        self.quality_note.setText("Offered by Brightcove for a recent goal" if live
+                                  else "Couldn't reach Brightcove \u2014 typical NHL renditions shown")
+
+    def load_renditions(self):
+        """Fetch the real rendition list off the UI thread (cached by the loader)."""
+        if self._rendition_loader is None:
+            return
+        loader = self._rendition_loader
+        self.renditions_loaded.connect(self._on_renditions)
+
+        def work():
+            try:
+                options, live = loader()
+            except Exception:  # noqa: BLE001
+                options, live = None, False
+            try:
+                self.renditions_loaded.emit(options, live)
+            except RuntimeError:  # dialog already closed
+                pass
+
+        threading.Thread(target=work, name="renditions", daemon=True).start()
+
+    @staticmethod
     def _double(low, high, value, suffix):
         spin = QDoubleSpinBox()
         spin.setRange(low, high)
@@ -530,7 +600,8 @@ class SettingsDialog(DarkDialog):
             if isinstance(widget, QCheckBox):
                 return "true" if widget.isChecked() else "false"
             if isinstance(widget, QComboBox):
-                return widget.currentText()
+                data = widget.currentData()
+                return str(data) if data is not None else widget.currentText()
             if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
                 return "{:g}".format(widget.value())
             return widget.text()
