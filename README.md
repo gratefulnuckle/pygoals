@@ -81,7 +81,7 @@ Flags are optional, per-run overrides; they are never written to
 | `--device NAME` | Friendly-name substring; skips the picker |
 | `--known-host IP` | Repeatable |
 | `--poll-seconds N` | 5-3600 |
-| `--port N` | Card server port (0 = any free port) |
+| `--port N` | Card server port (default 8765; 0 = any free port) |
 | `--no-overlay` | Video only, no player cards |
 | `--overlay-path DIR` | Where card PNGs are written (default: a temp dir, removed on exit) |
 | `--config PATH` | Use another settings.ini |
@@ -109,6 +109,41 @@ Precedence: **command-line flags > environment / `.env` > `settings.ini` >
 defaults.** Environment variables: `BRIGHTCOVE_PK`, `PYGOALS_DEVICE`,
 `PYGOALS_KNOWN_HOSTS`, `PYGOALS_POLL_SECONDS`, `PYGOALS_PORT`,
 `PYGOALS_LOG_LEVEL`. `PYGOALS_HOME` moves the whole data folder (used by tests).
+
+## Troubleshooting: the TV shows a blank receiver / no player cards
+
+Player cards are PNGs that the Chromecast downloads from a small web server
+inside pygoals on this PC (`http://<this PC>:8765/card-....png`). If the PC
+blocks inbound connections, the TV can't fetch them. pygoals waits a few
+seconds for the TV to fetch each card; if it never does, it shows a
+"TV can't reach this PC" notification once and plays the clips without cards.
+The highlight videos themselves stream from the NHL CDN and are not affected.
+
+`logs/pygoals.log` shows every request the TV makes
+(`card server: 192.168.x.y GET card-....png -> 200`), every `LOAD` sent to the
+Chromecast and every media status change (`Chromecast media: PLAYING ...`).
+No `card server:` lines after a `LOAD image/png` means the request was blocked.
+
+To allow it, keep the fixed port (`[server] port = 8765` in `settings.ini`) and
+allow inbound TCP on that port for private networks in whichever firewall is
+active on the PC:
+
+* **Windows Defender Firewall** - in an *administrator* PowerShell:
+
+  ```powershell
+  New-NetFirewallRule -DisplayName "pygoals cards (TCP 8765)" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow -Profile Private
+  ```
+
+  (Remove it later with `Remove-NetFirewallRule -DisplayName "pygoals cards (TCP 8765)"`.)
+* **Norton or another security suite** (which replaces the Windows firewall) -
+  add a traffic rule allowing inbound TCP 8765 from the local network, or allow
+  the Python interpreter that runs pygoals (the path to `pythonw.exe` is shown in
+  the notification and log, e.g.
+  `%LOCALAPPDATA%\Python\pythoncore-3.14-64\pythonw.exe`). Allowing the
+  project folder is not enough: the program listening is the interpreter.
+
+The PC's network should be marked *Private*. Alternatively turn cards off in
+Settings.
 
 ## Run at login (Windows)
 
