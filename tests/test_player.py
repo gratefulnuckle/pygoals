@@ -9,6 +9,11 @@ from fakes import FakeCast, fake_resolve, listing, make_discover
 from player import NHLVideoPlayer, PlayerOptions
 
 
+@pytest.fixture(autouse=True)
+def _fast_receiver_restart(monkeypatch):
+    monkeypatch.setattr(player_mod, "RECEIVER_RESTART_PAUSE", 0)
+
+
 def wait_for(predicate, timeout=3.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -145,7 +150,7 @@ def test_failed_load_skips_to_next_clip(key):
 def test_no_mp4_is_cached_not_re_resolved(key):
     calls = []
 
-    def resolve(clip, pk=None):
+    def resolve(clip, pk=None, **_kw):
         calls.append(clip.brightcove_id)
         clip.playback_url = None
         return clip
@@ -160,7 +165,7 @@ def test_no_mp4_is_cached_not_re_resolved(key):
 
 
 def test_auth_error_reported_once(key):
-    def resolve(clip, pk=None):
+    def resolve(clip, pk=None, **_kw):
         raise PolicyKeyError("Brightcove rejected the policy key (HTTP 401)")
 
     p, _cast = make_player([listing(1, 2)], resolve=resolve)
@@ -430,3 +435,123 @@ def test_media_status_transitions_are_logged(key, caplog):
         assert "SECRET" not in text
     finally:
         p.shutdown()
+
+
+def test_receiver_restarted_between_card_image_and_video(key, tmp_path, monkeypatch):
+    monkeypatch.setattr(player_mod, "RECEIVER_RESTART_PAUSE", 0)
+    monkeypatch.setattr(player_mod, "render_card",
+                        lambda pid, team, title, out_dir=None: (out_dir / "card-{}-x.png".format(pid)))
+    cast = FakeCast()
+    order = []
+    real_quit = cast.quit_app
+
+    def quit_app(timeout=None):
+        order.append("quit")
+        real_quit(timeout)
+
+    cast.quit_app = quit_app
+    real_play = cast.media_controller.play_media
+
+    def play_media(url, mime, **kw):
+        order.append(mime)
+        real_play(url, mime, **kw)
+
+    cast.media_controller.play_media = play_media
+
+    class Server(_UnreachableServer):
+        def wait_for_fetch(self, name, timeout, stop=None):
+            return True
+
+    p = NHLVideoPlayer(PlayerOptions(show_cards=True, card_seconds=0, overlay_path=str(tmp_path)),
+                       fetch_listing=lambda: listing(1), discover=make_discover(cast),
+                       resolve=fake_resolve, card_server_factory=Server)
+    try:
+        p.poll_listing()
+        connect(p)
+        assert p.advance() is True
+        assert order == ["image/png", "quit", "video/mp4"]
+    finally:
+        p.shutdown()
+
+
+def test_no_receiver_restart_without_image(key):
+    p, cast = make_player([listing(1, 2)])
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        cast.media_controller.finish()
+        assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
+        assert cast.quit_calls == 0
+    finally:
+        p.shutdown()
+
+
+def test_watchdog_skips_clip_frozen_while_playing(key):
+    p, cast = make_player([listing(1, 2)])
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        mc = cast.media_controller
+        mc.emit(player_state="PLAYING", content_id="https://cdn.example/bc1.mp4", current_time=4.2)
+        t0 = p._started_at
+        p.check_playback(now=t0 + 1)
+        p.check_playback(now=t0 + 2 + player_mod.STALL_SECONDS)
+        assert wait_for(lambda: len(mc.videos()) == 2)
+    finally:
+        p.shutdown()
+
+
+def test_max_height_passed_to_resolver(key):
+    seen = []
+
+    def resolve(clip, pk=None, **kw):
+        seen.append(kw.get("max_height"))
+        return fake_resolve(clip, pk=pk)
+
+    p, _cast = make_player([listing(1)], resolve=resolve, max_height=720)
+    try:
+        p.poll_listing()
+        assert seen == [720]
+    finally:
+        p.shutdown()
+
+
+def test_queued_clip_re_resolved_after_quality_change(key):
+    calls = []
+
+    def resolve(clip, pk=None, **kw):
+        calls.append(kw.get("quality"))
+        clip.playback_url = "https://cdn.example/{}-{}.mp4".format(clip.brightcove_id, kw.get("quality"))
+        clip.mime = "video/mp4"
+        return clip
+
+    p, cast = make_player([listing(1)], resolve=resolve)
+    try:
+        p.poll_listing()
+        p.options.quality = "mp4:720"
+        connect(p)
+        p.advance()
+        assert calls == ["auto", "mp4:720"]
+        assert cast.media_controller.videos() == ["https://cdn.example/bc1-mp4:720.mp4"]
+    finally:
+        p.shutdown()
+
+
+def test_available_renditions_falls_back_and_caches(monkeypatch):
+    import brightcove
+
+    monkeypatch.setattr(player_mod, "_rendition_cache", {"options": None, "at": 0.0})
+    options, live = player_mod.available_renditions(pk="", fetch_listing=lambda: {})
+    assert live is False and options == brightcove.STATIC_OPTIONS
+
+    class P:
+        def known_sources(self):
+            return [{"container": "MP4", "codec": "H264", "height": 720, "width": 1280,
+                     "avg_bitrate": 2000000, "src": "https://cdn.example/a.mp4"}]
+
+    options, live = player_mod.available_renditions(player=P())
+    assert live is True and [k for k, _ in options] == ["auto", "mp4:720"]
+    again, live = player_mod.available_renditions(player=None, pk="")
+    assert live is True and again == options  # cached

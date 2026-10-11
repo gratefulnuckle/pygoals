@@ -35,7 +35,9 @@ STALL_SECONDS = 25.0         # s stuck BUFFERING without progress => skip
 OVERRUN_GRACE = 45.0         # s past the clip duration => skip
 WATCHDOG_INTERVAL = 2.0
 STATUS_REFRESH = 6.0
-STREAM_TYPE = "BUFFERED"     # VOD clips; pychromecast's default (LIVE) stalls some receivers
+STREAM_TYPE = "BUFFERED"
+RECEIVER_RESTART_PAUSE = 1.5
+DEFAULT_RECEIVER_APP_ID = "CC1AD845"     # VOD clips; pychromecast's default (LIVE) stalls some receivers
 QUIT_TIMEOUT = 5.0
 DISCONNECT_TIMEOUT = 3.0
 
@@ -103,6 +105,8 @@ class Events:
 class PlayerOptions:
     poll_seconds: float = 60.0
     card_seconds: float = 4.0
+    max_height: int = 1080
+    quality: str = "auto"
     show_cards: bool = True
     port: int = 0
     known_hosts: list = field(default_factory=list)
@@ -237,6 +241,7 @@ class NHLVideoPlayer:
         self._last_status = None
         self._status_key = None
         self._card_warned = False
+        self._image_session = False
         self._watchdog = None
         self._started_at = 0.0
         self._progress = (None, 0.0)  # (current_time, monotonic when it last changed)
@@ -295,7 +300,9 @@ class NHLVideoPlayer:
                 continue
             if resolve:
                 try:
-                    self._resolve(clip, pk=key)
+                    self._resolve(clip, pk=key, max_height=self.options.max_height,
+                                  quality=self.options.quality)
+                    clip.resolved_for = self._quality_choice()
                 except PolicyKeyError as exc:
                     if not self._auth_reported:
                         self._auth_reported = True
@@ -374,6 +381,9 @@ class NHLVideoPlayer:
                 self._release_cast(old_cast)
             self.cast = cast
             self.device = device
+            # A receiver left over from an earlier run may be stuck on an image
+            # or a frozen video; start the first clip in a fresh one.
+            self._image_session = getattr(cast, "app_id", None) == DEFAULT_RECEIVER_APP_ID
             # The scan browser now owns the active cast; retire the old owner.
             if self._scan_browser is not None and self._scan_browser is not self._cast_browser:
                 if self._cast_browser is not None:
@@ -427,6 +437,7 @@ class NHLVideoPlayer:
         if title:
             kwargs["title"] = title
         log.info("LOAD %s %s on %s", mime, describe_url(url), self.device.name if self.device else "?")
+        self._image_session = str(mime).startswith("image/")
         try:
             mc.play_media(url, mime, **kwargs)
         except TypeError:  # very old pychromecast without these keywords
@@ -508,6 +519,53 @@ class NHLVideoPlayer:
         except Exception:
             log.warning("idle card failed", exc_info=True)
 
+    def _quality_choice(self):
+        return (self.options.quality, self.options.max_height)
+
+    def _refresh_rendition(self, clip):
+        """Re-resolve a queued clip if the quality setting changed since."""
+        wanted = self._quality_choice()
+        had = getattr(clip, "resolved_for", None)
+        if had is None or had == wanted or self.options.dry_run:
+            return
+        key = policy_key()
+        if not key:
+            return
+        try:
+            self._resolve(clip, pk=key, max_height=self.options.max_height, quality=self.options.quality)
+            clip.resolved_for = wanted
+        except Exception as exc:  # noqa: BLE001 - keep the earlier URL
+            log.warning("re-resolve for new quality failed (%s); using the earlier rendition", exc)
+
+    def known_sources(self):
+        """Brightcove sources of a clip resolved this session, if any."""
+        clips = [self.queue.current] + list(self.queue.pending())
+        for clip in clips:
+            if clip is not None and getattr(clip, "sources", None):
+                return clip.sources
+        return None
+
+    def _reset_receiver_after_image(self):
+        """Quit the Default Media Receiver if it is showing an image.
+
+        On Google TV devices (onn 4K Pro) a video LOADed into a receiver session
+        that last displayed an image plays audio only and its clock freezes a
+        few seconds in. A fresh receiver plays the same URL fine, so the session
+        is closed and play_media launches a new one.
+        """
+        cast = self.cast
+        if cast is None or not self._image_session:
+            return
+        log.info("restarting the Default Media Receiver before the video (image session)")
+        try:
+            cast.quit_app(timeout=10)
+        except Exception:
+            log.warning("could not quit the receiver app", exc_info=True)
+        self._image_session = False
+        with self._status_cond:
+            self._last_status = None
+        self.stop.wait(RECEIVER_RESTART_PAUSE)
+
     def _play_clip(self, clip):
         card = None
         if self.options.show_cards and clip.player_id:
@@ -521,7 +579,11 @@ class NHLVideoPlayer:
             log.info("No playback URL for %s", clip.title)
             self.queue.mark_failed(clip.brightcove_id)
             return False
+        self._refresh_rendition(clip)
+        self._reset_receiver_after_image()
         try:
+            if getattr(clip, "rendition", ""):
+                log.info("casting %s as %s", clip.title, clip.rendition)
             self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title)
         except Exception as exc:
             self.report_error(ERR_PLAYBACK, "Could not play {}: {}".format(clip.title, exc))
@@ -623,8 +685,8 @@ class NHLVideoPlayer:
             last_time, since = self._progress
             if current != last_time:
                 self._progress = (current, now)
-            elif getattr(status, "player_state", None) == "BUFFERING" and now - since >= STALL_SECONDS:
-                reason = "stuck BUFFERING at {}s for {:.0f}s".format(current, now - since)
+            elif getattr(status, "player_state", None) in ("BUFFERING", "PLAYING") and now - since >= STALL_SECONDS:
+                reason = "stuck {} at {}s for {:.0f}s".format(status.player_state, current, now - since)
         limit = max(30.0, (clip.duration_ms or 0) / 1000.0) + OVERRUN_GRACE
         if reason is None and now - self._started_at > limit:
             reason = "still not finished {:.0f}s after start".format(now - self._started_at)
@@ -761,3 +823,44 @@ class NHLVideoPlayer:
             except Exception:
                 pass
         self.events.emit(STOPPED)
+
+
+_rendition_cache = {"options": None, "at": 0.0}
+RENDITION_CACHE_SECONDS = 6 * 3600
+
+
+def available_renditions(pk=None, player=None, fetch_listing=None, http_get=None, force=False):
+    """Dropdown options ``[(key, label)]`` from what Brightcove really offers.
+
+    Uses a clip the player already resolved, else looks up the newest goal in
+    the NHL listing. Cached for a few hours; falls back to a static list
+    (second value False) when offline or without a key.
+    """
+    import brightcove
+
+    cache = _rendition_cache
+    now = time.monotonic()
+    if not force and cache["options"] and now - cache["at"] < RENDITION_CACHE_SECONDS:
+        return cache["options"], True
+    try:
+        sources = player.known_sources() if player is not None else None
+        if not sources:
+            key = pk if pk is not None else policy_key()
+            if not key:
+                raise RuntimeError("no Brightcove key")
+            payload = (fetch_listing or (lambda: get_json(VIDEO_URL)))()
+            clips = clips_from_listing(payload)[0]
+            if not clips:
+                raise RuntimeError("no goal clips in the listing")
+            probe = clips[0]
+            resolve_clip(probe, http_get=http_get, pk=key)
+            sources = getattr(probe, "sources", None)
+        options = brightcove.rendition_options(sources or [], http_get=http_get)
+        if len(options) <= 1:
+            raise RuntimeError("no H.264 renditions offered")
+    except Exception as exc:  # noqa: BLE001 - static list instead
+        log.info("rendition list unavailable (%s); using the typical NHL list", exc)
+        return list(brightcove.STATIC_OPTIONS), False
+    cache["options"], cache["at"] = options, now
+    return options, True
+
