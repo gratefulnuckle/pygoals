@@ -10,6 +10,7 @@ import logging
 import re
 import socket
 import threading
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -49,6 +50,8 @@ class _CardHandler(BaseHTTPRequestHandler):
     directory = Path(".")
     server_version = "pygoals-cards"
 
+    on_fetch = None  # set per server: callback(name, client_ip)
+
     def log_message(self, fmt, *args):
         log.debug("%s - " + fmt, self.address_string(), *args)
 
@@ -62,9 +65,15 @@ class _CardHandler(BaseHTTPRequestHandler):
 
     def _respond(self, include_body):
         path = self._resolve()
+        client = self.client_address[0] if self.client_address else "?"
+        name = unquote(urlsplit(self.path).path).lstrip("/")
         if path is None:
+            log.info("card server: %s %s %s -> 404", client, self.command, name[:60])
             self.send_error(404, "Not Found")
             return
+        log.info("card server: %s %s %s -> 200", client, self.command, path.name)
+        if self.on_fetch is not None:
+            self.on_fetch(path.name, client)
         try:
             data = path.read_bytes()
         except OSError:
@@ -96,6 +105,28 @@ class CardServer:
         self.port = None
         self.host_for_clients = host_for_clients or lan_ip()
         self._stopped = False
+        self._fetched = {}
+        self._fetch_cond = threading.Condition()
+
+    def _record_fetch(self, name, client):
+        with self._fetch_cond:
+            self._fetched[name] = client
+            self._fetch_cond.notify_all()
+
+    def was_fetched(self, name):
+        with self._fetch_cond:
+            return name in self._fetched
+
+    def wait_for_fetch(self, name, timeout, stop=None):
+        """True once a client GETs ``name`` (the Chromecast fetching the card)."""
+        deadline = time.monotonic() + timeout
+        with self._fetch_cond:
+            while name not in self._fetched:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or (stop is not None and stop.is_set()):
+                    return False
+                self._fetch_cond.wait(min(0.25, remaining))
+            return True
 
     def start(self):
         directory = self.directory
@@ -104,7 +135,14 @@ class CardServer:
             pass
 
         Bound.directory = directory
-        self._httpd = ThreadingHTTPServer((self.bind, self.requested_port), Bound)
+        Bound.on_fetch = staticmethod(self._record_fetch)
+        try:
+            self._httpd = ThreadingHTTPServer((self.bind, self.requested_port), Bound)
+        except OSError as exc:
+            if not self.requested_port:
+                raise
+            log.warning("card port %s unavailable (%s); using a random port this run", self.requested_port, exc)
+            self._httpd = ThreadingHTTPServer((self.bind, 0), Bound)
         self._httpd.daemon_threads = True
         self.port = self._httpd.server_address[1]
         self._thread = threading.Thread(target=self._httpd.serve_forever, name="pygoals-cards", daemon=True)

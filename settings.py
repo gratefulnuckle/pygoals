@@ -40,7 +40,7 @@ class Settings:
     show_cards: bool = True
     remember_seen: bool = True
     # [server]
-    port: int = 0
+    port: int = 8765
     # [ui]
     snap_to_tray: bool = True
     bar_x: int | None = None
@@ -91,7 +91,7 @@ COMMENTS = {
     "brightcove": "Brightcove player policy key. BRIGHTCOVE_PK in the environment or .env overrides this.",
     "device": "Active Chromecast. Set from the Devices page; uuid is matched first, then name, then host.",
     "playback": "poll_seconds: 5-3600. card_seconds: 0-30 (0 = no pause on the card).",
-    "server": "LAN port for player cards. 0 = pick a free port each run.",
+    "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",
     "ui": "Media bar position. snap_to_tray = true ignores bar_x/bar_y and anchors above the tray icon.",
     "notifications": "Dark toast notifications above the tray. toast_seconds: 2-60.",
     "logging": "level: DEBUG, INFO, WARNING or ERROR. Logs go to ./logs/pygoals.log.",

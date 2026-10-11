@@ -60,3 +60,28 @@ def test_loopback_detection_and_lan_ip_fallback():
     assert not is_loopback("192.168.1.20")
     assert not is_loopback("not-an-ip")
     assert lan_ip("127.0.0.1") == "127.0.0.1"
+
+
+def test_fetches_are_recorded_for_card_confirmation(server):
+    assert not server.was_fetched("idle.png")
+    assert server.wait_for_fetch("idle.png", 0.05) is False
+    fetch(server, "/idle.png")
+    assert server.was_fetched("idle.png")
+    assert server.wait_for_fetch("idle.png", 0.05) is True
+    fetch(server, "/secret.txt")
+    assert not server.was_fetched("secret.txt")
+
+
+def test_busy_fixed_port_falls_back_to_random(tmp_path):
+    first = CardServer(tmp_path, bind="127.0.0.1", port=0, host_for_clients="127.0.0.1").start()
+    try:
+        second = CardServer(tmp_path, bind="127.0.0.1", port=first.port, host_for_clients="127.0.0.1")
+        import socket as _s
+        if hasattr(_s, "SO_EXCLUSIVEADDRUSE") or True:
+            try:
+                second.start()
+                assert second.port != 0
+            finally:
+                second.stop()
+    finally:
+        first.stop()

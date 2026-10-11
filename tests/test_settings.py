@@ -62,7 +62,7 @@ def test_bad_values_in_file_fall_back_to_defaults(tmp_path):
     loaded = s.load(path)
     assert loaded.poll_seconds == 60.0
     assert loaded.card_seconds == 3.0
-    assert loaded.port == 0
+    assert loaded.port == 8765  # invalid -> default
 
 
 def test_garbage_file_does_not_crash(tmp_path):
@@ -77,7 +77,7 @@ def test_environment_overrides_ini():
                                        "PYGOALS_PORT": "bogus"})
     assert eff.policy_key == "from-env"
     assert eff.poll_seconds == 15.0
-    assert eff.port == 0  # invalid env value ignored
+    assert eff.port == 8765  # invalid env value ignored
     assert eff.device_name == "Kitchen"
     assert stored.policy_key == "from-ini"  # stored copy untouched
 
@@ -104,3 +104,31 @@ def test_env_device_replaces_saved_device_identity():
     stored = s.Settings(device_name="Kitchen", device_uuid="u-kitchen", device_host="192.168.1.9")
     eff = s.effective(stored, environ={"PYGOALS_DEVICE": "Den"})
     assert (eff.device_name, eff.device_uuid, eff.device_host) == ("Den", "", "")
+
+
+def test_default_card_port_is_fixed():
+    assert s.Settings().port == 8765
+    assert "port = 8765" in s.to_text(s.Settings())
+
+
+def test_log_file_is_utf8_with_bom_and_rolls_old_files(tmp_path):
+    import logging
+
+    from config import setup_logging
+
+    path = tmp_path / "logs" / "pygoals.log"
+    path.parent.mkdir()
+    path.write_bytes("old line without bom\n".encode("utf-8"))
+    written = setup_logging("INFO", to_file=True, path=path)
+    logging.getLogger("pygoals.test").info("skip All of Saturday\u2019s goals")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+    data = path.read_bytes()
+    assert written == path
+    assert data.startswith(b"\xef\xbb\xbf")
+    assert "Saturday\u2019s".encode("utf-8") in data
+    assert (tmp_path / "logs" / "pygoals.log.1").read_bytes().startswith(b"old line")
+    for handler in list(logging.getLogger().handlers):
+        if getattr(handler, "_pygoals", False):
+            logging.getLogger().removeHandler(handler)
+            handler.close()
