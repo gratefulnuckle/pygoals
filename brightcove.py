@@ -1,50 +1,84 @@
-"""Brightcove Playback API: pick an MP4, never embed the policy key in source."""
+"""Brightcove Playback API: pick a playable source. The policy key comes from
+the environment (BRIGHTCOVE_PK / .env) or settings.ini, never from source."""
 
 import logging
 import os
+from urllib.parse import urlsplit
 
-import requests
+import http_util
 
 log = logging.getLogger(__name__)
 
 ACCOUNT_URL = "https://edge.api.brightcove.com/playback/v1/accounts/6415718365001/videos/{}"
 HTTP_TIMEOUT = 10
+HLS_MIME = "application/x-mpegURL"
+
+_configured_key = ""
+
+
+class PolicyKeyError(RuntimeError):
+    """Brightcove rejected the policy key (HTTP 401/403)."""
+
+
+def set_policy_key(key):
+    """Key from settings.ini; the environment still wins in ``policy_key``."""
+    global _configured_key
+    _configured_key = (key or "").strip()
 
 
 def policy_key():
-    return os.environ.get("BRIGHTCOVE_PK", "").strip()
+    return os.environ.get("BRIGHTCOVE_PK", "").strip() or _configured_key
+
+
+def _src(source):
+    return str(source.get("src") or "")
+
+
+def _is_https(source):
+    return _src(source).lower().startswith("https://")
+
+
+def _path_endswith(source, suffix):
+    return urlsplit(_src(source)).path.lower().endswith(suffix)
 
 
 def pick_mp4_source(sources):
+    """Highest MP4, preferring HTTPS; HLS only if no MP4 exists."""
     if not sources:
         return None, None
-    mp4s = []
-    for source in sources:
-        src = source.get("src") or ""
-        container = str(source.get("container") or "").upper()
-        if container == "MP4" or src.lower().endswith(".mp4"):
-            mp4s.append(source)
-    if not mp4s:
-        hls = [s for s in sources if "m3u8" in str(s.get("src") or "").lower()]
-        if hls:
-            return hls[0].get("src"), "application/x-mpegURL"
-        return None, None
-    best = max(mp4s, key=lambda s: s.get("height") or 0)
-    return best.get("src"), "video/mp4"
+    usable = [s for s in sources if isinstance(s, dict) and _src(s)]
+    mp4s = [
+        s for s in usable
+        if str(s.get("container") or "").upper() == "MP4" or _path_endswith(s, ".mp4")
+    ]
+    if mp4s:
+        best = max(mp4s, key=lambda s: (_is_https(s), s.get("height") or 0, s.get("avg_bitrate") or 0))
+        return _src(best), "video/mp4"
+    hls = [
+        s for s in usable
+        if "m3u8" in _src(s).lower() or "mpegurl" in str(s.get("type") or "").lower()
+    ]
+    if hls:
+        best = max(hls, key=_is_https)
+        return _src(best), HLS_MIME
+    return None, None
 
 
 def resolve_clip(clip, http_get=None, pk=None):
     key = pk if pk is not None else policy_key()
     if not key:
         raise RuntimeError("BRIGHTCOVE_PK is not set")
-    getter = http_get or requests.get
+    getter = http_get or http_util.get
     url = ACCOUNT_URL.format(clip.brightcove_id)
     headers = {
         "accept": "application/json;pk={}".format(key),
         "origin": "https://players.brightcove.net",
-        "user-agent": "pygoals/1.1",
     }
     response = getter(url, headers=headers, timeout=HTTP_TIMEOUT)
+    status = getattr(response, "status_code", 200)
+    if status in (401, 403):
+        # Never include the key itself in the message.
+        raise PolicyKeyError("Brightcove rejected the policy key (HTTP {})".format(status))
     response.raise_for_status()
     payload = response.json()
     src, mime = pick_mp4_source(payload.get("sources") or [])
@@ -56,3 +90,6 @@ def resolve_clip(clip, http_get=None, pk=None):
         except (TypeError, ValueError):
             pass
     return clip
+
+
+__all__ = ["PolicyKeyError", "pick_mp4_source", "policy_key", "resolve_clip", "set_policy_key"]

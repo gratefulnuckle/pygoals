@@ -62,3 +62,43 @@ def espn_slug(code):
 def lookup_theme(code):
     key = canonical_team(code)
     return THEMES.get(key, DEFAULT)
+
+
+def _rgb(hex_color):
+    value = str(hex_color).lstrip("#")
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def relative_luminance(hex_color):
+    """WCAG 2.x relative luminance of an sRGB hex color."""
+    def channel(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in _rgb(hex_color))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a, b):
+    la, lb = relative_luminance(a), relative_luminance(b)
+    high, low = max(la, lb), min(la, lb)
+    return (high + 0.05) / (low + 0.05)
+
+
+def text_color_for(background):
+    """Black or white, whichever reads better on ``background``."""
+    white, black = "#FFFFFF", "#111111"
+    if contrast_ratio(background, white) >= contrast_ratio(background, black):
+        return white
+    return black
+
+
+def accent_on_dark(code, dark="#12141A"):
+    """Team color that stays visible on the dark media bar."""
+    theme = lookup_theme(code)
+    best = max((theme["primary"], theme["secondary"]), key=lambda c: contrast_ratio(c, dark))
+    if contrast_ratio(best, dark) < 2.0:
+        return "#5B8CFF"
+    return best
