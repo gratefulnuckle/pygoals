@@ -162,11 +162,11 @@ def test_card_mode_default_and_legacy_show_cards(tmp_path):
 
 def test_receiver_settings():
     d = s.Settings()
-    assert (d.receiver_mode, d.receiver_app_id) == ("auto", "A7C76189")
+    assert (d.receiver_mode, d.receiver_app_id) == ("auto", "7B4ABD0E")
     assert s.validate_values({"receiver_app_id": ""}).receiver_app_id == ""  # blank = never use it
-    r = s.validate_values({"receiver_mode": "Custom", "receiver_app_id": "a7c76189"})
-    assert (r.receiver_mode, r.receiver_app_id) == ("custom", "A7C76189")
-    assert "[cast]" in s.to_text(r) and "receiver_app_id = A7C76189" in s.to_text(r)
+    r = s.validate_values({"receiver_mode": "Custom", "receiver_app_id": "7b4abd0e"})
+    assert (r.receiver_mode, r.receiver_app_id) == ("custom", "7B4ABD0E")
+    assert "[cast]" in s.to_text(r) and "receiver_app_id = 7B4ABD0E" in s.to_text(r)
     with pytest.raises(s.SettingsError) as info:
         s.validate_values({"receiver_mode": "chromecast", "receiver_app_id": "XYZ"})
     assert set(info.value.errors) == {"receiver_mode", "receiver_app_id"}
@@ -183,4 +183,4 @@ def test_blank_receiver_app_id_in_file_is_kept(tmp_path):
     path.write_text("[cast]\nreceiver_app_id =\n", encoding="utf-8")
     assert s.load(path).receiver_app_id == ""
     path.write_text("[cast]\nreceiver_mode = auto\n", encoding="utf-8")
-    assert s.load(path).receiver_app_id == "A7C76189"
+    assert s.load(path).receiver_app_id == "7B4ABD0E"

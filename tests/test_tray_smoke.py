@@ -162,7 +162,7 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     dialog.card_mode_combo.setCurrentIndex(dialog.card_mode_combo.findData("image"))
     dialog.card_spin.setValue(3)
     dialog.receiver_combo.setCurrentIndex(dialog.receiver_combo.findData("custom"))
-    dialog.app_id_edit.setText("a7c76189")
+    dialog.app_id_edit.setText("7b4abd0e")
     assert dialog.video_overlay.isChecked() is False
     dialog.video_overlay.setChecked(True)
     assert dialog.save() is True
@@ -173,6 +173,6 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     text = (isolated_home / "settings.ini").read_text(encoding="utf-8")
     assert "quality = hls:1080" in text and "max_height = 720" in text and "level = DEBUG" in text
     assert "card_mode = image" in text and "card_seconds = 3" in text
-    assert "receiver_mode = custom" in text and "receiver_app_id = A7C76189" in text
-    assert controller.player.options.receiver_app_id == "A7C76189"
+    assert "receiver_mode = custom" in text and "receiver_app_id = 7B4ABD0E" in text
+    assert controller.player.options.receiver_app_id == "7B4ABD0E"
     assert controller.player.options.video_overlay is True and "video_overlay = true" in text

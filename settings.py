@@ -30,7 +30,7 @@ MAX_POLL_SECONDS = 3600.0
 # The pygoals Cast receiver (https://gratefulnuckle.github.io/pygoals-receiver/).
 # Unpublished for now: it only launches on registered test devices; elsewhere
 # receiver_mode = auto quietly uses the Default Media Receiver.
-DEFAULT_RECEIVER_APP_ID = "A7C76189"
+DEFAULT_RECEIVER_APP_ID = "7B4ABD0E"
 
 
 @dataclass
@@ -116,7 +116,7 @@ COMMENTS = {
     "playback": "poll_seconds: 5-3600. card_mode: video (card plays as a short clip right before the goal, seamless), image (still card; the receiver restarts before the goal) or off. card_seconds: 0-30 (video cards last at least 1 s). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
     "cast": ("Which Cast receiver plays the goals. receiver_mode: auto (pygoals receiver if receiver_app_id is set "
              "and it launches, else the default receiver), custom (always the pygoals receiver) or default. "
-             "receiver_app_id: Cast app ID of the pygoals receiver (A7C76189; unpublished for now, so it only launches on "
+             "receiver_app_id: Cast app ID of the pygoals receiver (7B4ABD0E; unpublished for now, so it only launches on "
              "registered test devices and auto falls back to the default receiver); blank = never use it. "
              "video_overlay: show title text over the goal video (receiver lower third / cast title); off = clean video."),
     "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",

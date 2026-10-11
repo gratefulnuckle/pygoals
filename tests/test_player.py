@@ -657,7 +657,7 @@ def test_missing_ffmpeg_falls_back_to_image_cards(key, tmp_path, monkeypatch):
         p.shutdown()
 
 
-def _custom_player(mode="auto", app="A7C76189", launch_error=None, n=2, **opts):
+def _custom_player(mode="auto", app="7B4ABD0E", launch_error=None, n=2, **opts):
     cast = FakeCast()
     cast.launch_error = launch_error
     p, cast = make_player([listing(*range(1, n + 1))], cast=cast, receiver_mode=mode, receiver_app_id=app,
@@ -674,7 +674,7 @@ def test_custom_receiver_launched_and_loads_carry_card_data(key, monkeypatch):
         p.poll_listing()
         connect(p)
         assert p.advance() is True
-        assert cast.started_apps == ["A7C76189"]
+        assert cast.started_apps == ["7B4ABD0E"]
         mc = cast.media_controller
         assert mc.played == [("https://cdn.example/bc1.mp4", "video/mp4")]  # no card image/video
         kw = mc.kwargs[-1]
@@ -683,7 +683,7 @@ def test_custom_receiver_launched_and_loads_carry_card_data(key, monkeypatch):
         assert kw["metadata"]["images"] == [{"url": "https://img/h.png"}]
         mc.finish()
         assert wait_for(lambda: len(mc.videos()) == 2)
-        assert cast.started_apps == ["A7C76189"]  # already running: not relaunched
+        assert cast.started_apps == ["7B4ABD0E"]  # already running: not relaunched
         assert not mc.queue_loads and cast.quit_calls == 0
     finally:
         p.shutdown()
@@ -692,19 +692,19 @@ def test_custom_receiver_launched_and_loads_carry_card_data(key, monkeypatch):
 def test_auto_falls_back_to_default_receiver_once(key, monkeypatch):
     monkeypatch.setattr(player_mod, "receiver_card", lambda clip, secs, **kw: {"title": clip.title})
     monkeypatch.setattr(player_mod, "card_video", lambda png, secs, out_path=None, **kw: out_path)
-    p, cast = _custom_player(launch_error=RuntimeError("Failed to execute start app A7C76189"), card_mode="off")
+    p, cast = _custom_player(launch_error=RuntimeError("Failed to execute start app 7B4ABD0E"), card_mode="off")
     errors = []
     p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append((kind, message)))
     try:
         p.poll_listing()
         connect(p)
         assert p.advance() is True
-        assert cast.started_apps == ["A7C76189"]
+        assert cast.started_apps == ["7B4ABD0E"]
         assert cast.media_controller.videos() == ["https://cdn.example/bc1.mp4"]
         assert "media_info" not in cast.media_controller.kwargs[-1]
         cast.media_controller.finish()
         assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
-        assert cast.started_apps == ["A7C76189"]  # auto: not retried for every goal
+        assert cast.started_apps == ["7B4ABD0E"]  # auto: not retried for every goal
         assert errors == []  # auto falls back quietly (logged at INFO)
         p.reset_receiver_choice()  # e.g. settings saved
         assert p.wants_custom_receiver() is True
@@ -724,7 +724,7 @@ def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
         p.advance()
         cast.media_controller.finish()
         assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
-        assert cast.started_apps == ["A7C76189", "A7C76189"]
+        assert cast.started_apps == ["7B4ABD0E", "7B4ABD0E"]
         assert errors == [player_mod.ERR_RECEIVER]
         assert "standard Cast receiver" in messages[0] and "timed out" not in messages[0]
     finally:
@@ -732,11 +732,11 @@ def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
 
 
 @pytest.mark.parametrize("mode,app,expected", [
-    ("default", "A7C76189", False),
+    ("default", "7B4ABD0E", False),
     ("auto", "", False),
     ("custom", "", False),
-    ("auto", "A7C76189", True),
-    ("custom", "A7C76189", True),
+    ("auto", "7B4ABD0E", True),
+    ("custom", "7B4ABD0E", True),
 ])
 def test_receiver_selection(key, mode, app, expected):
     p, cast = _custom_player(mode=mode, app=app, card_mode="off")

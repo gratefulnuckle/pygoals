@@ -152,7 +152,7 @@ whose position stops advancing for 25 s or that runs well past its length.
 
 ## pygoals Cast receiver
 
-pygoals ships with its own Google Cast receiver (Cast app `A7C76189`), a static
+pygoals ships with its own Google Cast receiver (Cast app `7B4ABD0E`), a static
 CAF v3 Web Receiver in `receiver/` published at
 https://gratefulnuckle.github.io/pygoals-receiver/ (mirror repo
 `gratefulnuckle/pygoals-receiver`, GitHub Pages). It plays the goal and draws
@@ -174,7 +174,7 @@ configured either way.
 ```ini
 [cast]
 receiver_mode = auto        ; auto | custom | default
-receiver_app_id = A7C76189  ; built-in default; blank = never use a custom receiver
+receiver_app_id = 7B4ABD0E  ; built-in default; blank = never use a custom receiver
 ```
 
 * `auto` (default): try the pygoals receiver; if the TV refuses it, use the

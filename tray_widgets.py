@@ -454,7 +454,7 @@ class SettingsDialog(DarkDialog):
         form.addRow("Cast receiver", self.receiver_combo)
         self.widgets["receiver_mode"] = self.receiver_combo
         self.app_id_edit = QLineEdit(stored.receiver_app_id)
-        self.app_id_edit.setPlaceholderText("Cast app ID, e.g. A7C76189 (blank = default receiver)")
+        self.app_id_edit.setPlaceholderText("Cast app ID, e.g. 7B4ABD0E (blank = default receiver)")
         self.app_id_edit.setMaxLength(8)
         self.app_id_edit.setToolTip("Unpublished receivers only run on devices registered as Cast test devices")
         form.addRow("Receiver app ID", self.app_id_edit)

@@ -32,6 +32,6 @@ Nothing queued for a few seconds brings back the idle screen. No custom namespac
 
 ## Registering
 
-The Cast app (ID `A7C76189`) is unpublished, so it only runs on devices registered
+The Cast app (ID `7B4ABD0E`) is unpublished, so it only runs on devices registered
 as test devices in the Google Cast SDK Developer Console (serial number, then
 about 15 minutes and a device reboot).
