@@ -1,0 +1,10 @@
+{
+  "id": "bc123",
+  "duration": 25000,
+  "long_description": "unused",
+  "sources": [
+    {"src": "https://cdn.example/hls.m3u8", "container": "M2TS", "type": "application/x-mpegURL", "height": 720},
+    {"src": "https://cdn.example/low.mp4", "container": "MP4", "height": 360},
+    {"src": "https://cdn.example/high.mp4", "container": "MP4", "height": 1080}
+  ]
+}

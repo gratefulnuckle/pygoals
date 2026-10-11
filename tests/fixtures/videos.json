@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "title": "Every Batted-in Goal from the 2025-26 NHL Season",
+      "fields": {
+        "brightcoveId": "comp1",
+        "duration": 600000
+      },
+      "tags": []
+    },
+    {
+      "title": "Slafkovsky scores",
+      "fields": {
+        "brightcoveId": "bc123",
+        "statsEventId": "1281",
+        "duration": 25000,
+        "longDescription": "A nice finish"
+      },
+      "tags": [
+        {"extraData": {"playerId": "8483515"}},
+        {"extraData": {"abbreviation": "MTL"}}
+      ]
+    },
+    {
+      "title": "Missing player tags",
+      "fields": {
+        "brightcoveId": "bc999",
+        "statsEventId": "5",
+        "duration": 20000
+      },
+      "tags": []
+    }
+  ]
+}

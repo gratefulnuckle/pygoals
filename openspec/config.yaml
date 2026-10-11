@@ -1,0 +1,37 @@
+schema: spec-driven
+
+context: |
+  pygoals is a personal LAN tool: NHL goal highlight clips → Chromecast, with
+  a generated player card shown before each clip. Single module today:
+  pygoals.py (NHLVideoPlayer). Stack: Python 3.10+, requests, pychromecast,
+  zeroconf, Pillow, pynput. Imgur is a prototype crutch — prefer LAN HTTP
+  for cards. Secrets (Brightcove policy key, Imgur) MUST live in env or a
+  gitignored file, never source. Do not paste credential values into docs
+  or logs. Playback identity is Brightcove video id; goal identity is
+  (gameId, statsEventId) when both exist. Never default event id to 0.
+  Do not poll IDLE every second as "play next." Use MediaStatusListener and
+  idle_reason FINISHED. One Zeroconf, one lock or queue, interruptible quit.
+
+rules:
+  proposal:
+    - Name the ISSUES.md IDs this change closes
+    - Never copy Brightcove PK or Imgur secrets into artifacts
+    - Prefer dropping Imgur over wrapping it
+  specs:
+    - Use Given/When/Then
+    - Spec CLI flags, env names, and observable Cast behavior
+  design:
+    - Named GoalClip structure, not 6-tuples
+    - LAN HTTP for cards unless the user opts into a public host
+  tasks:
+    - Include a verification command
+    - HTTP tests use fixtures, not live NHL/Brightcove/Imgur
+
+operations:
+  apply:
+    guidance:
+      - Rotate any credential that was ever committed before calling the work done
+      - Confirm Ctrl+C actually stops timers and discovery
+  archive:
+    guidance:
+      - Update ISSUES.md status for closed IDs
