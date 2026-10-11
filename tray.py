@@ -23,7 +23,7 @@ from brightcove import policy_key
 from config import app_dir, set_log_level
 from team_theme import accent_on_dark
 from tray_geometry import anchor_position, stack_positions, visible_on_any
-from tray_style import DANGER, WARN, apply_dark_theme, glyph_icon, style_menu, tray_icon
+from tray_style import DANGER, WARN, app_icon, apply_dark_theme, glyph_icon, style_menu, tray_icon
 from tray_widgets import DevicesDialog, PlaybarWindow, SettingsDialog, ToastManager
 
 log = logging.getLogger("pygoals.tray")
@@ -597,6 +597,7 @@ def run_tray(runtime, player=None):
     app = QApplication.instance() or QApplication(["pygoals"])
     app.setApplicationName("pygoals")
     app.setApplicationDisplayName("pygoals")
+    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
     apply_dark_theme(app)
     if not QSystemTrayIcon.isSystemTrayAvailable():

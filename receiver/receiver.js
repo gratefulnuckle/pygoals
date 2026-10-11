@@ -185,13 +185,6 @@
     if (status && status.playerState === 'IDLE') { maybeIdle(); }
   });
 
-  function tick() {
-    var now = new Date();
-    $('idle-clock').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  }
-  tick();
-  setInterval(tick, 10000);
-
   playerManager.setMediaElement(document.getElementById('video'));
 
   var options = new cast.framework.CastReceiverOptions();

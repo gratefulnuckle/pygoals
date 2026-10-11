@@ -142,3 +142,16 @@ def test_receiver_card_without_player_info():
     clip = SimpleNamespace(title="Goal", team=None, player_id="1")
     payload = cards.receiver_card(clip, 0, http_get_json=broken)
     assert payload["title"] == "Goal" and "player" not in payload and payload["logo"] == ""
+
+
+def test_idle_card_is_logo_on_dark_grey(tmp_path):
+    import cards
+    from config import asset_path
+
+    path = cards.idle_card(tmp_path)
+    img = Image.open(path).convert("RGB")
+    assert img.size == (1280, 720)
+    assert img.getpixel((5, 5)) == (0x1E, 0x1F, 0x22)
+    if asset_path("logo.png") is not None:
+        colors = img.resize((64, 36)).getcolors(4096)
+        assert any(g > b + 60 and g >= r for _n, (r, g, b) in colors)  # green snake present

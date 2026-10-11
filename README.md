@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" width="200" alt="pygoals logo"></p>
+
 # pygoals
 
 Cast NHL **goal highlight** clips to a Chromecast on your LAN, from a small
@@ -161,7 +163,9 @@ title. The card appears the instant a goal is loaded (it covers buffering),
 stays for the card duration, then fades out to clean video, so there is no gap
 and no PNG/MP4 card is generated. The goal plays in a plain `<video>` element,
 so the receiver draws no title, metadata or progress bar over it. When nothing
-is queued it shows a pygoals idle screen.
+is queued it shows the pygoals logo on dark grey. pygoals launches it as soon
+as it connects to the Chromecast, so the TV shows that idle screen before the
+first goal. (With the standard receiver, the idle image is the same logo.)
 
 **It is unpublished for now.** Google only lets an unpublished receiver run on
 devices registered as test devices in the

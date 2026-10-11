@@ -176,3 +176,25 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     assert "receiver_mode = custom" in text and "receiver_app_id = 7B4ABD0E" in text
     assert controller.player.options.receiver_app_id == "7B4ABD0E"
     assert controller.player.options.video_overlay is True and "video_overlay = true" in text
+
+
+def test_logo_icons(qapp):
+    from config import asset_path
+    import tray_style
+
+    assert asset_path("logo.png") is not None and asset_path("icon.ico") is not None
+    for state in ("idle", "playing", "paused", "error"):
+        icon = tray_style.tray_icon(state)
+        assert not icon.isNull() and icon.availableSizes()
+    assert not tray_style.app_icon().isNull()
+    assert tray_style.logo_pixmap(56).width() == 56
+
+
+def test_tray_icon_falls_back_without_assets(qapp, monkeypatch):
+    import config
+    import tray_style
+
+    monkeypatch.setattr(config, "asset_path", lambda name: None)
+    monkeypatch.setattr(tray_style, "_logo_cache", {})
+    assert not tray_style.tray_icon("playing").isNull()
+    assert not tray_style.app_icon().isNull()

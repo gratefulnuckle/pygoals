@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.png" width="200" alt="pygoals logo"></p>
+
 # pygoals receiver
 
 Google Cast Web Receiver (CAF v3) for [pygoals](https://github.com/gratefulnuckle/pygoals):
@@ -28,7 +30,8 @@ stays for `cardSeconds` of playback, then fades out to clean video (or to a lowe
 third when `lowerSeconds` > 0). The video plays in a plain `<video>` element, so no
 CAF title/metadata overlay is drawn over it. Without
 `customData` the receiver falls back to `metadata.title` / `subtitle` / `images`.
-Nothing queued for a few seconds brings back the idle screen. No custom namespace.
+Nothing queued for a few seconds brings back the idle screen: the pygoals logo
+centred on dark grey (`#1e1f22`). No custom namespace.
 
 ## Registering
 

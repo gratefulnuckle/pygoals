@@ -17,6 +17,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from config import asset_path
 from http_util import get_bytes, get_json
 from team_theme import accent_on_dark, canonical_team, espn_slug, lookup_theme, text_color_for
 
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 PLAYER_URL = "https://api-web.nhle.com/v1/player/{}/landing"
 LOGO_URL = "https://a.espncdn.com/combiner/i?img=/i/teamlogos/nhl/500/{}.png"
 WIDTH, HEIGHT = 1280, 720
+IDLE_BACKGROUND = "#1e1f22"
 SPLIT = int(HEIGHT * 0.6)
 TITLE_MAX_LINES = 3
 TITLE_MARGIN = 60
@@ -294,11 +296,23 @@ def idle_card(out_dir=None):
     folder = Path(out_dir or tempfile.mkdtemp(prefix="pygoals-"))
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "idle.png"
-    img = Image.new("RGB", (WIDTH, HEIGHT), "#041E42")
-    draw = ImageDraw.Draw(img)
-    font = _font(40)
-    text = "pygoals \u2014 waiting for goals"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 340), text, font=font, fill="white")
+    img = Image.new("RGB", (WIDTH, HEIGHT), IDLE_BACKGROUND)
+    logo_file = asset_path("logo.png")
+    logo = None
+    if logo_file is not None:
+        try:
+            logo = _to_rgba(Image.open(logo_file))
+        except OSError:
+            log.debug("logo unreadable", exc_info=True)
+    if logo is not None:
+        side = int(HEIGHT * 0.62)
+        logo = logo.resize((side, side), Image.LANCZOS)
+        img.paste(logo, ((WIDTH - side) // 2, (HEIGHT - side) // 2), logo)
+    else:
+        draw = ImageDraw.Draw(img)
+        font = _font(40)
+        text = "pygoals \u2014 waiting for goals"
+        bbox = draw.textbbox((0, 0), text, font=font)
+        draw.text(((WIDTH - (bbox[2] - bbox[0])) // 2, 340), text, font=font, fill="white")
     img.save(path)
     return path

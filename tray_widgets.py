@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 
 import brightcove as brightcove_mod
 import settings as settings_mod
-from tray_style import ACCENT, DANGER, MUTED, glyph_icon, rounded_pixmap
+from tray_style import ACCENT, DANGER, MUTED, glyph_icon, logo_pixmap, rounded_pixmap
 
 SHADOW_MARGIN = 14
 
@@ -183,6 +183,10 @@ class PlaybarWindow(_DragMixin, QWidget):
         if pixmap is not None and not pixmap.isNull():
             self.art.setPixmap(rounded_pixmap(pixmap, self.ART, 10))
             self.art.setText("")
+        elif not initials and logo_pixmap(self.ART) is not None:
+            # Nothing playing: the pygoals logo as a brand mark.
+            self.art.clear()
+            self.art.setPixmap(logo_pixmap(self.ART))
         else:
             self.art.setPixmap(rounded_pixmap(None, self.ART))
             self.art.clear()

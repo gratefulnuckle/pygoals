@@ -23,6 +23,7 @@ dist/
 *.png
 !tests/**
 !assets/**
+!receiver/**
 
 # keep caches out even under re-included dirs
 **/__pycache__/

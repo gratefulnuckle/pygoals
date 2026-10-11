@@ -30,6 +30,21 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def asset_path(name):
+    """Bundled asset (assets/<name>) next to the code or the frozen exe; None if missing."""
+    roots = []
+    if getattr(sys, "_MEIPASS", None):
+        roots.append(Path(sys._MEIPASS))
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+    roots.append(Path(__file__).resolve().parent)
+    for root in roots:
+        path = root / "assets" / name
+        if path.is_file():
+            return path
+    return None
+
+
 def settings_path() -> Path:
     return app_dir() / "settings.ini"
 

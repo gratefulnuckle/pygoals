@@ -724,7 +724,7 @@ def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
         p.advance()
         cast.media_controller.finish()
         assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
-        assert cast.started_apps == ["7B4ABD0E", "7B4ABD0E"]
+        assert cast.started_apps == ["7B4ABD0E"] * 3  # connect + each goal
         assert errors == [player_mod.ERR_RECEIVER]
         assert "standard Cast receiver" in messages[0] and "timed out" not in messages[0]
     finally:
@@ -797,5 +797,30 @@ def test_title_sent_when_video_overlay_on(key):
         connect(p)
         p.advance()
         assert cast.media_controller.kwargs[-1]["title"] == "Goal 1"
+    finally:
+        p.shutdown()
+
+
+def test_custom_receiver_launched_on_connect_without_goals(key):
+    p, cast = _custom_player(n=0, card_mode="off")
+    try:
+        connect(p)
+        assert cast.started_apps == ["7B4ABD0E"]
+        assert p.custom_receiver_running()
+        assert p.advance() is False  # nothing queued
+        assert cast.media_controller.played == []  # no idle.png on top of the receiver's own idle screen
+    finally:
+        p.shutdown()
+
+
+def test_refused_custom_receiver_on_connect_shows_default_idle_card(key, tmp_path, monkeypatch):
+    p, cast = _custom_player(n=0, launch_error=RuntimeError("Failed to execute start app 7B4ABD0E"),
+                             card_mode="off", overlay_path=str(tmp_path))
+    try:
+        connect(p)
+        assert cast.started_apps == ["7B4ABD0E"]
+        assert p.wants_custom_receiver() is False
+        p.advance()
+        assert cast.media_controller.played[-1][1] == "image/png"  # logo idle card on the default receiver
     finally:
         p.shutdown()

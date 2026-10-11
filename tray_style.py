@@ -196,8 +196,63 @@ STATE_COLORS = {
 }
 
 
+_logo_cache = {}
+
+
+def logo_pixmap(size=64):
+    """The pygoals logo scaled to ``size`` (cached); None if the asset is missing."""
+    if size in _logo_cache:
+        return _logo_cache[size]
+    from config import asset_path
+
+    pixmap = None
+    exact = asset_path("tray-{}.png".format(size))
+    source = exact or asset_path("logo.png")
+    if source is not None:
+        loaded = QPixmap(str(source))
+        if not loaded.isNull():
+            pixmap = loaded if exact else loaded.scaled(
+                size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    _logo_cache[size] = pixmap
+    return pixmap
+
+
+def app_icon():
+    """Window/app icon from assets/icon.ico (or the logo); a drawn icon if missing."""
+    from config import asset_path
+
+    for name in ("icon.ico", "logo.png"):
+        path = asset_path(name)
+        if path is not None:
+            icon = QIcon(str(path))
+            if not icon.isNull():
+                return icon
+    return _drawn_tray_icon("idle", 32)
+
+
 def tray_icon(state="idle", size=32):
-    """Goal-light tray icon: dark disc, colored lamp for the current state."""
+    """The logo, with a small status dot (playing / paused / error) when not idle."""
+    sizes = [s for s in (16, 32, 64) if logo_pixmap(s) is not None]
+    if not sizes:
+        return _drawn_tray_icon(state, size)
+    icon = QIcon()
+    for s in sizes:
+        pixmap = QPixmap(logo_pixmap(s))
+        if state != "idle":
+            p = QPainter(pixmap)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            r = max(2.5, s * 0.17)
+            center = QPointF(s - r - 0.5, s - r - 0.5)
+            p.setPen(QPen(QColor(BG), max(1.0, s / 16)))
+            p.setBrush(QColor(STATE_COLORS.get(state, STATE_COLORS["idle"])))
+            p.drawEllipse(center, r, r)
+            p.end()
+        icon.addPixmap(pixmap)
+    return icon
+
+
+def _drawn_tray_icon(state="idle", size=32):
+    """Fallback goal-light icon: dark disc, colored lamp for the current state."""
     pixmap, p = _canvas(size)
     s = float(size)
     p.setPen(Qt.PenStyle.NoPen)

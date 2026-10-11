@@ -424,6 +424,12 @@ class NHLVideoPlayer:
                     )
             self._idle_shown = False
         log.info("Using Chromecast %s (%s)", device.name, device.host)
+        if self.wants_custom_receiver() and not self.options.dry_run:
+            # Bring up the pygoals receiver right away so the TV shows its
+            # logo idle screen even before the first goal.
+            with self._advance_lock:
+                if self.cast is cast and self._ensure_custom_receiver():
+                    self._idle_shown = True
         self.start_watchdog()
         self.events.emit(DEVICE, device=device)
         self._set_status("Connected to {}".format(device.name))
