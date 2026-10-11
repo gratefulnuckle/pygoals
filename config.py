@@ -92,6 +92,37 @@ def load_dotenv(path=None, override=False):
     return applied
 
 
+class Utf8RotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """UTF-8 log file that starts with a BOM, so Notepad and Windows
+    PowerShell 5 (Get-Content) show curly quotes and accents correctly."""
+
+    def __init__(self, filename, **kwargs):
+        kwargs["encoding"] = "utf-8"
+        super().__init__(filename, **kwargs)
+        try:
+            if self.stream is not None and self.stream.tell() > 0 and not _has_bom(self.baseFilename):
+                self.doRollover()  # older BOM-less log: start a fresh file
+        except OSError:
+            pass
+
+    def _open(self):
+        stream = super()._open()
+        try:
+            if stream.tell() == 0:
+                stream.write("\ufeff")
+        except OSError:
+            pass
+        return stream
+
+
+def _has_bom(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(3) == b"\xef\xbb\xbf"
+    except OSError:
+        return False
+
+
 def setup_logging(level="INFO", to_file=True, path=None):
     """Console logging when a console exists, plus a rotating file in ./logs."""
     root = logging.getLogger()
@@ -114,9 +145,7 @@ def setup_logging(level="INFO", to_file=True, path=None):
         target = Path(path) if path else log_path()
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            handler = logging.handlers.RotatingFileHandler(
-                target, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
-            )
+            handler = Utf8RotatingFileHandler(target, maxBytes=1_000_000, backupCount=3)
             handler.setFormatter(logging.Formatter(LOG_FORMAT))
             handler._pygoals = True
             root.addHandler(handler)
