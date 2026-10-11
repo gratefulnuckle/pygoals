@@ -169,3 +169,9 @@ def test_receiver_settings():
     with pytest.raises(s.SettingsError) as info:
         s.validate_values({"receiver_mode": "chromecast", "receiver_app_id": "XYZ"})
     assert set(info.value.errors) == {"receiver_mode", "receiver_app_id"}
+
+
+def test_video_overlay_default_off():
+    assert s.Settings().video_overlay is False
+    assert "video_overlay = false" in s.to_text(s.Settings())
+    assert s.validate_values({"video_overlay": "on"}).video_overlay is True

@@ -46,6 +46,7 @@ class Settings:
     # [cast]
     receiver_mode: str = "auto"
     receiver_app_id: str = ""
+    video_overlay: bool = False
     # [server]
     port: int = 8765
     # [ui]
@@ -90,6 +91,7 @@ SCHEMA = (
     ("playback", "remember_seen", "remember_seen", "bool"),
     ("cast", "receiver_mode", "receiver_mode", "recvmode"),
     ("cast", "receiver_app_id", "receiver_app_id", "appid"),
+    ("cast", "video_overlay", "video_overlay", "bool"),
     ("server", "port", "port", "port"),
     ("ui", "snap_to_tray", "snap_to_tray", "bool"),
     ("ui", "bar_x", "bar_x", "optint"),
@@ -108,7 +110,8 @@ COMMENTS = {
     "playback": "poll_seconds: 5-3600. card_mode: video (card plays as a short clip right before the goal, seamless), image (still card; the receiver restarts before the goal) or off. card_seconds: 0-30 (video cards last at least 1 s). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
     "cast": ("Which Cast receiver plays the goals. receiver_mode: auto (pygoals receiver if receiver_app_id is set "
              "and it launches, else the default receiver), custom (always the pygoals receiver) or default. "
-             "receiver_app_id: 8-character Cast app ID, e.g. A7C76189 (unpublished apps only run on registered test devices)."),
+             "receiver_app_id: 8-character Cast app ID, e.g. A7C76189 (unpublished apps only run on registered test devices). "
+             "video_overlay: show title text over the goal video (receiver lower third / cast title); off = clean video."),
     "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",
     "ui": "Media bar position. snap_to_tray = true ignores bar_x/bar_y and anchors above the tray icon.",
     "notifications": "Dark toast notifications above the tray. toast_seconds: 2-60.",

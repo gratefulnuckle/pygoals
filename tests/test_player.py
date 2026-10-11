@@ -667,8 +667,9 @@ def _custom_player(mode="auto", app="A7C76189", launch_error=None, n=2, **opts):
 
 def test_custom_receiver_launched_and_loads_carry_card_data(key, monkeypatch):
     monkeypatch.setattr(player_mod, "receiver_card", lambda clip, secs, **kw: {
-        "title": clip.title, "player": "Auston Matthews", "headshot": "https://img/h.png", "cardSeconds": secs})
-    p, cast = _custom_player(card_seconds=3)
+        "title": clip.title, "player": "Auston Matthews", "headshot": "https://img/h.png", "cardSeconds": secs,
+        "lowerSeconds": kw.get("lower_seconds")})
+    p, cast = _custom_player(card_seconds=3, video_overlay=True)
     try:
         p.poll_listing()
         connect(p)
@@ -739,5 +740,60 @@ def test_receiver_selection(key, mode, app, expected):
     p, cast = _custom_player(mode=mode, app=app, card_mode="off")
     try:
         assert p.wants_custom_receiver() is expected
+    finally:
+        p.shutdown()
+
+
+def test_no_text_over_video_by_default_custom_receiver(key, monkeypatch):
+    seen = {}
+
+    def fake_card(clip, secs, **kw):
+        seen.update(kw)
+        return {"title": clip.title, "player": "Auston Matthews", "headshot": "https://img/h.png",
+                "cardSeconds": secs, "lowerSeconds": kw.get("lower_seconds")}
+
+    monkeypatch.setattr(player_mod, "receiver_card", fake_card)
+    p, cast = _custom_player(card_seconds=3)
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        kw = cast.media_controller.kwargs[-1]
+        assert "title" not in kw and kw["metadata"] == {"metadataType": 0}
+        assert seen["lower_seconds"] == 0
+        assert kw["media_info"]["customData"]["pygoals"]["player"] == "Auston Matthews"  # card keeps details
+        assert p.queue.current.title == "Goal 1"  # tray still has the title
+    finally:
+        p.shutdown()
+
+
+def test_no_text_over_video_by_default_queue_items(key, tmp_path, monkeypatch):
+    cast = FakeCast()
+    p, _encoded = _video_card_player(tmp_path, monkeypatch, cast, n=1)
+    sent = []
+    real = cast.media_controller.send_message
+
+    def capture(data, **kw):
+        sent.append(data)
+        return real(data, **kw)
+
+    cast.media_controller.send_message = capture
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        for item in sent[-1]["items"]:
+            assert item["media"]["metadata"] == {"metadataType": 0}
+    finally:
+        p.shutdown()
+
+
+def test_title_sent_when_video_overlay_on(key):
+    p, cast = make_player([listing(1)], video_overlay=True)
+    try:
+        p.poll_listing()
+        connect(p)
+        p.advance()
+        assert cast.media_controller.kwargs[-1]["title"] == "Goal 1"
     finally:
         p.shutdown()

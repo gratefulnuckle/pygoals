@@ -62,6 +62,7 @@ ERR_PLAYBACK = "playback"
 ERR_CARD_UNREACHABLE = "card_unreachable"
 ERR_RECEIVER = "receiver"
 CUSTOM_LAUNCH_TIMEOUT = 15.0
+LOWER_THIRD_SECONDS = 8.0
 
 
 def describe_url(url):
@@ -113,6 +114,7 @@ class PlayerOptions:
     card_mode: str = "video"  # video | image (off is show_cards=False)
     receiver_mode: str = "auto"  # auto | custom | default
     receiver_app_id: str = ""
+    video_overlay: bool = False  # title text over the video (cast metadata / receiver lower third)
     port: int = 0
     known_hosts: list = field(default_factory=list)
     overlay_path: str | None = None
@@ -501,7 +503,7 @@ class NHLVideoPlayer:
         self._ensure_server()
         card = render_card(clip.player_id, clip.team, clip.title, out_dir=self.overlay_dir)
         url = self.server.url_for(card)
-        self._send_load(url, "image/png", clip.title)
+        self._send_load(url, "image/png", self._overlay_title(clip))
         name = Path(card).name
         if not self.server.wait_for_fetch(name, CARD_FETCH_TIMEOUT, stop=self.stop):
             self._card_unreachable()
@@ -539,6 +541,10 @@ class NHLVideoPlayer:
             self._idle_shown = True
         except Exception:
             log.warning("idle card failed", exc_info=True)
+
+    def _overlay_title(self, clip):
+        """Title for cast metadata; None keeps receivers from drawing text over the video."""
+        return clip.title if self.options.video_overlay else None
 
     def _quality_choice(self):
         return (self.options.quality, self.options.max_height)
@@ -671,14 +677,17 @@ class NHLVideoPlayer:
         mc = cast.media_controller
 
         def item(url, mime, title, preload):
+            metadata = {"metadataType": 0}
+            if title:
+                metadata["title"] = title
             return {"media": {"contentId": url, "contentType": mime, "streamType": STREAM_TYPE,
-                              "metadata": {"metadataType": 0, "title": title}},
+                              "metadata": metadata},
                     "autoplay": True, "startTime": 0, "preloadTime": preload}
 
         message = {
             "type": "QUEUE_LOAD",
-            "items": [item(card_url, "video/mp4", clip.title, 0),
-                      item(clip.playback_url, clip.mime or "video/mp4", clip.title,
+            "items": [item(card_url, "video/mp4", self._overlay_title(clip), 0),
+                      item(clip.playback_url, clip.mime or "video/mp4", self._overlay_title(clip),
                            min(3, self._card_seconds()))],
             "startIndex": 0,
             "repeatMode": "REPEAT_OFF",
@@ -778,14 +787,18 @@ class NHLVideoPlayer:
         custom = self.wants_custom_receiver() and self._ensure_custom_receiver()
         extra = None
         if custom:
-            payload = receiver_card(clip, self.options.card_seconds if self.options.show_cards else 0)
+            lower = LOWER_THIRD_SECONDS if self.options.video_overlay else 0
+            payload = receiver_card(clip, self.options.card_seconds if self.options.show_cards else 0,
+                                    lower_seconds=lower)
             if not self.options.show_cards:
-                payload = {"title": clip.title, "cardSeconds": 0, "lowerSeconds": 0}
-            metadata = {"metadataType": 0, "title": clip.title}
-            if payload.get("player"):
-                metadata["subtitle"] = payload["player"]
-            if payload.get("headshot"):
-                metadata["images"] = [{"url": payload["headshot"]}]
+                payload = {"title": clip.title, "cardSeconds": 0, "lowerSeconds": lower}
+            metadata = {"metadataType": 0}
+            if self.options.video_overlay:
+                metadata["title"] = clip.title
+                if payload.get("player"):
+                    metadata["subtitle"] = payload["player"]
+                if payload.get("headshot"):
+                    metadata["images"] = [{"url": payload["headshot"]}]
             extra = {"media_info": {"customData": {"pygoals": payload}}, "metadata": metadata}
         mode = self.options.card_mode if (self.options.show_cards and clip.player_id and not custom) else "off"
         if mode == "video" and not self._video_cards_ok:
@@ -825,7 +838,8 @@ class NHLVideoPlayer:
             if not custom:
                 self._reset_receiver_after_image()
             try:
-                self._play_media(clip.playback_url, clip.mime or "video/mp4", title=clip.title, extra=extra)
+                self._play_media(clip.playback_url, clip.mime or "video/mp4", title=self._overlay_title(clip),
+                                 extra=extra)
             except Exception as exc:
                 self.report_error(ERR_PLAYBACK, "Could not play {}: {}".format(clip.title, exc))
                 self.queue.mark_failed(clip.brightcove_id)

@@ -134,6 +134,7 @@ class Runtime:
             card_mode=eff.card_mode,
             receiver_mode=eff.receiver_mode,
             receiver_app_id=eff.receiver_app_id,
+            video_overlay=eff.video_overlay,
             port=eff.port,
             known_hosts=list(eff.known_hosts),
             overlay_path=self.args.overlay_path,
@@ -156,6 +157,7 @@ class Runtime:
         options.quality = eff.quality
         options.show_cards = eff.show_cards
         options.card_mode = eff.card_mode
+        options.video_overlay = eff.video_overlay
         if (options.receiver_mode, options.receiver_app_id) != (eff.receiver_mode, eff.receiver_app_id):
             options.receiver_mode = eff.receiver_mode
             options.receiver_app_id = eff.receiver_app_id

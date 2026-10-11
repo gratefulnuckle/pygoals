@@ -130,7 +130,7 @@ def player_info(player_id, http_get_json=None):
     return dict(info)
 
 
-def receiver_card(clip, card_seconds=3.0, http_get_json=None):
+def receiver_card(clip, card_seconds=3.0, http_get_json=None, lower_seconds=0):
     """``customData.pygoals`` for the pygoals Cast receiver (HTML card overlay)."""
     team = getattr(clip, "team", None)
     theme = lookup_theme(team)
@@ -146,6 +146,7 @@ def receiver_card(clip, card_seconds=3.0, http_get_json=None):
         "accent": accent_on_dark(team),
         "logo": LOGO_URL.format(espn_slug(team)) if team else "",
         "cardSeconds": round(max(0.0, float(card_seconds or 0)), 1),
+        "lowerSeconds": round(max(0.0, float(lower_seconds or 0)), 1),
     }
     payload.update(player_info(getattr(clip, "player_id", None), http_get_json=http_get_json))
     return payload

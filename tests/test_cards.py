@@ -128,6 +128,7 @@ def test_receiver_card_payload(monkeypatch):
     assert payload["headshot"] == "https://assets.nhle.com/x.png"
     assert payload["team"] == "TOR" and payload["primary"].startswith("#") and payload["logo"].startswith("https://")
     assert payload["cardSeconds"] == 3.0 and payload["title"] == "Matthews snipes"
+    assert payload["lowerSeconds"] == 0
     cards.receiver_card(clip, 3, http_get_json=landing)
     assert len(calls) == 1  # cached
 

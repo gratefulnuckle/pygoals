@@ -459,6 +459,10 @@ class SettingsDialog(DarkDialog):
         self.app_id_edit.setToolTip("Unpublished receivers only run on devices registered as Cast test devices")
         form.addRow("Receiver app ID", self.app_id_edit)
         self.widgets["receiver_app_id"] = self.app_id_edit
+        self.video_overlay = self._check("Show title text over the goal video", stored.video_overlay)
+        self.video_overlay.setToolTip("Off: the card shows the details, then the goal plays as clean video")
+        form.addRow("", self.video_overlay)
+        self.widgets["video_overlay"] = self.video_overlay
 
         self.card_mode_combo = QComboBox()
         for value, label in (("video", "Video \u2014 seamless into the goal"),

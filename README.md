@@ -155,8 +155,10 @@ whose position stops advancing for 25 s or that runs well past its length.
 `receiver/` holds a Google Cast Web Receiver (CAF v3, static HTML/CSS/JS) that
 plays the goal and draws the player card as an HTML overlay: headshot, team
 logo and colours, scorer and title. The card appears the instant a goal is
-loaded (it covers buffering), stays for the card duration, then shrinks to a
-lower third, so there is no gap and no PNG/MP4 card is generated. When nothing
+loaded (it covers buffering), stays for the card duration, then fades out to
+clean video, so there is no gap and no PNG/MP4 card is generated. The goal
+plays in a plain `<video>` element, so the receiver draws no title, metadata or
+progress bar over it. When nothing
 is queued it shows a pygoals idle screen. It is published at
 https://gratefulnuckle.github.io/pygoals-receiver/ (mirror repo
 `gratefulnuckle/pygoals-receiver`, GitHub Pages) and registered as Cast app
@@ -181,7 +183,15 @@ receiver_app_id = A7C76189  ; blank = always the Default Media Receiver
   to the default receiver for that goal).
 * `default`: never use it.
 
-Both are in Settings ("Cast receiver", "Receiver app ID"). Loads carry
+`[cast] video_overlay = false` (default) also keeps text off the video on the
+Default Media Receiver: goal loads carry no title/subtitle/image metadata (the
+tray still shows the title). The default receiver still shows its own
+progress bar briefly on load; only the pygoals receiver removes that. Text that
+NHL burned into the highlight video itself can't be removed. Set it to `true`
+for a lower third on the pygoals receiver and titles on the default one.
+
+All three are in Settings ("Cast receiver", "Receiver app ID", "Show title text
+over the goal video"). Loads carry
 `media.customData.pygoals` (see `receiver/README.md`).
 
 ## Troubleshooting: the TV shows a blank receiver / no player cards
