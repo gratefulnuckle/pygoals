@@ -5,6 +5,10 @@ for a different goal; ``cleanup_cards`` removes old ones.
 """
 
 import io
+import os
+import shutil
+import subprocess
+import sys
 import logging
 import tempfile
 import uuid
@@ -153,11 +157,70 @@ def render_card(player_id, team, title, out_dir=None, http_get_json=None, http_g
     return path
 
 
+class CardVideoUnavailable(RuntimeError):
+    """No ffmpeg to turn a card into a video."""
+
+
+def ffmpeg_exe():
+    """ffmpeg from imageio-ffmpeg (bundled binary) or PATH; None if neither."""
+    try:
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and Path(exe).is_file():
+            return exe
+    except Exception:  # noqa: BLE001 - not installed / no binary for this platform
+        pass
+    return shutil.which("ffmpeg")
+
+
+def card_video(png_path, seconds=4.0, out_path=None, exe=None, run=None):
+    """Encode a card PNG into a short silent 1080p H.264/AAC MP4.
+
+    The Chromecast plays card video -> goal video back to back in one receiver
+    session; image -> video freezes some Google TV devices.
+    """
+    exe = exe or ffmpeg_exe()
+    if not exe:
+        raise CardVideoUnavailable("ffmpeg not found (pip install imageio-ffmpeg)")
+    png_path = Path(png_path)
+    out_path = Path(out_path) if out_path else png_path.with_suffix(".mp4")
+    seconds = "{:.2f}".format(max(1.0, float(seconds)))
+    tmp = out_path.with_name(out_path.stem + ".part.mp4")
+    cmd = [
+        exe, "-y", "-hide_banner", "-loglevel", "error",
+        "-loop", "1", "-framerate", "30", "-t", seconds, "-i", str(png_path),
+        "-f", "lavfi", "-t", seconds, "-i", "anullsrc=r=48000:cl=stereo",
+        "-vf", "scale=1920:1080:flags=lanczos,format=yuv420p",
+        "-c:v", "libx264", "-profile:v", "high", "-level", "4.0", "-preset", "veryfast",
+        "-tune", "stillimage", "-crf", "20", "-g", "30",
+        "-c:a", "aac", "-b:a", "64k", "-shortest", "-movflags", "+faststart", str(tmp),
+    ]
+    runner = run or subprocess.run
+    kwargs = {"check": True, "capture_output": True, "timeout": 60}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW (pythonw)
+    try:
+        runner(cmd, **kwargs)
+        os.replace(tmp, out_path)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+        raise RuntimeError("ffmpeg failed: {}".format(detail)) from None
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return out_path
+
+
 def cleanup_cards(out_dir, keep=()):
-    """Delete card-*.png in ``out_dir`` except the names in ``keep``."""
+    """Delete card-*.png/.mp4 in ``out_dir`` except the names in ``keep``."""
     keep_names = {Path(k).name for k in keep if k}
     removed = 0
-    for path in Path(out_dir).glob("card-*.png"):
+    paths = list(Path(out_dir).glob("card-*.png")) + list(Path(out_dir).glob("card-*.mp4"))
+    for path in paths:
         if path.name in keep_names:
             continue
         try:

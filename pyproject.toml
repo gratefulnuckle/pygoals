@@ -16,6 +16,7 @@ dependencies = [
     "zeroconf>=0.131",
     "Pillow>=10.1",
     "PyQt6>=6.5",
+    "imageio-ffmpeg>=0.5",
 ]
 
 [project.optional-dependencies]

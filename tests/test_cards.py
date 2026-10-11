@@ -1,3 +1,4 @@
+import pytest
 import io
 from pathlib import Path
 
@@ -69,3 +70,41 @@ def test_long_titles_wrap_within_width():
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         assert bbox[2] - bbox[0] <= 1160
+
+
+def test_card_video_builds_h264_aac_command(tmp_path):
+    import cards
+
+    png = tmp_path / "card-8-abc.png"
+    png.write_bytes(b"png")
+    seen = {}
+
+    def run(cmd, **kw):
+        seen["cmd"] = cmd
+        Path(cmd[-1]).write_bytes(b"mp4")
+
+    out = cards.card_video(png, 3, exe="ffmpeg", run=run)
+    assert out == tmp_path / "card-8-abc.mp4" and out.read_bytes() == b"mp4"
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-c:v") + 1] == "libx264" and cmd[cmd.index("-c:a") + 1] == "aac"
+    assert "scale=1920:1080" in cmd[cmd.index("-vf") + 1] and cmd[cmd.index("-t") + 1] == "3.00"
+    assert not list(tmp_path.glob("*.part.mp4"))
+
+
+def test_card_video_without_ffmpeg(tmp_path, monkeypatch):
+    import cards
+
+    monkeypatch.setattr(cards, "ffmpeg_exe", lambda: None)
+    with pytest.raises(cards.CardVideoUnavailable):
+        cards.card_video(tmp_path / "x.png", 3)
+
+
+def test_cleanup_removes_card_videos(tmp_path):
+    import cards
+
+    tmp_path = tmp_path / "cards"
+    tmp_path.mkdir()
+    for name in ("card-1-a.png", "card-1-a.mp4", "card-2-b.mp4", "idle.png"):
+        (tmp_path / name).write_bytes(b"x")
+    cards.cleanup_cards(tmp_path, keep=["card-2-b.mp4"])
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["card-2-b.mp4", "idle.png"]

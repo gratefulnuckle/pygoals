@@ -1,6 +1,7 @@
-"""Serve player-card PNGs on the LAN so the Chromecast can GET them.
+"""Serve player cards on the LAN so the Chromecast can GET them.
 
-Only ``idle.png`` and ``card-*.png`` in the card directory are served; no
+Only ``idle.png``, ``card-*.png`` and ``card-*.mp4`` in the card directory are
+served (single byte ranges supported for the MP4s); no
 directory listings, no other files, no path traversal.
 """
 
@@ -16,7 +17,8 @@ from urllib.parse import unquote, urlsplit
 
 log = logging.getLogger(__name__)
 
-ALLOWED_NAME = re.compile(r"^(idle\.png|card-[A-Za-z0-9_-]+\.png)$")
+ALLOWED_NAME = re.compile(r"^(idle\.png|card-[A-Za-z0-9_-]+\.(png|mp4))$")
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
 
 def lan_ip(target=None):
@@ -79,8 +81,27 @@ class _CardHandler(BaseHTTPRequestHandler):
         except OSError:
             self.send_error(404, "Not Found")
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "image/png")
+        total = len(data)
+        start, end = 0, total - 1
+        match = _RANGE_RE.match(self.headers.get("Range", "").strip()) if self.headers else None
+        if match and total and (match.group(1) or match.group(2)):
+            if match.group(1):
+                start = int(match.group(1))
+                end = min(int(match.group(2)), total - 1) if match.group(2) else total - 1
+            else:
+                start = max(0, total - int(match.group(2)))
+            if start > end or start >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */{}".format(total))
+                self.end_headers()
+                return
+            self.send_response(206)
+            self.send_header("Content-Range", "bytes {}-{}/{}".format(start, end, total))
+            data = data[start:end + 1]
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", "video/mp4" if path.suffix == ".mp4" else "image/png")
+        self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")

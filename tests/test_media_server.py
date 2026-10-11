@@ -85,3 +85,17 @@ def test_busy_fixed_port_falls_back_to_random(tmp_path):
                 second.stop()
     finally:
         first.stop()
+
+
+def test_serves_card_videos_with_ranges(server):
+    (server.directory / "card-8-abc.mp4").write_bytes(b"0123456789")
+    status, body, headers = fetch(server, "/card-8-abc.mp4")
+    assert (status, body, headers["Content-Type"]) == (200, b"0123456789", "video/mp4")
+    assert headers["Accept-Ranges"] == "bytes"
+    url = "http://127.0.0.1:{}/card-8-abc.mp4".format(server.port)
+    request = urllib.request.Request(url, headers={"Range": "bytes=2-5"})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert response.status == 206
+        assert response.read() == b"2345"
+        assert response.headers["Content-Range"] == "bytes 2-5/10"
+    assert fetch(server, "/card-8-abc.mov")[0] == 404
