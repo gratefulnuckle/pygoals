@@ -36,7 +36,7 @@ ERROR_TITLES = {
     player_mod.ERR_NETWORK: "Network problem",
     player_mod.ERR_PLAYBACK: "Playback problem",
     player_mod.ERR_CARD_UNREACHABLE: "TV can't reach this PC",
-    player_mod.ERR_RECEIVER: "pygoals receiver unavailable",
+    player_mod.ERR_RECEIVER: "Using the standard Cast receiver",
 }
 REFOCUS_GUARD = 0.35  # s: ignore the tray click that just closed the bar
 

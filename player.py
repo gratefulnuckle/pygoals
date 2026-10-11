@@ -761,21 +761,23 @@ class NHLVideoPlayer:
     def _custom_receiver_failed(self, exc):
         app = self.options.receiver_app_id
         auto = (self.options.receiver_mode or "auto").lower() == "auto"
-        if auto:
-            self._custom_failed = True
         detail = str(exc) or type(exc).__name__
-        log.warning("pygoals receiver %s did not launch: %s", app, detail)
+        device = self.device.name if self.device else "the TV"
+        if auto:
+            # Normal for most TVs while the receiver is unpublished: no toast.
+            self._custom_failed = True
+            log.info("pygoals receiver %s isn't available on %s (%s); using the standard Cast "
+                     "receiver with video cards", app, device, detail)
+            return
+        log.warning("pygoals receiver %s did not launch on %s: %s", app, device, detail)
         if self._receiver_warned:
             return
         self._receiver_warned = True
-        device = self.device.name if self.device else "the TV"
         message = (
-            "The pygoals Cast receiver (app {}) didn't start on {} ({}). {} An unpublished "
-            "receiver only runs on devices registered as Cast test devices (Cast SDK Developer "
-            "Console > add the serial number; it can take ~15 minutes and a device reboot)."
-        ).format(app, device, detail,
-                 "Using the default receiver with video cards instead." if auto
-                 else "Playing on the default receiver for now; it will be tried again for each goal.")
+            "The pygoals receiver isn't available on {} yet, so goals play on the standard Cast "
+            "receiver for now. It's in testing and only runs on TVs registered as Cast test "
+            "devices. Set Cast receiver to Auto to stop this notice."
+        ).format(device)
         self.report_error(ERR_RECEIVER, message)
 
     def _play_clip(self, clip):

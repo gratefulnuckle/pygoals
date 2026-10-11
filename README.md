@@ -150,38 +150,42 @@ Player cards come in three styles (`[playback] card_mode`, also in Settings as
 at least 1 s). A watchdog polls the receiver every few seconds and skips a clip
 whose position stops advancing for 25 s or that runs well past its length.
 
-## pygoals Cast receiver (optional)
+## pygoals Cast receiver
 
-`receiver/` holds a Google Cast Web Receiver (CAF v3, static HTML/CSS/JS) that
-plays the goal and draws the player card as an HTML overlay: headshot, team
-logo and colours, scorer and title. The card appears the instant a goal is
-loaded (it covers buffering), stays for the card duration, then fades out to
-clean video, so there is no gap and no PNG/MP4 card is generated. The goal
-plays in a plain `<video>` element, so the receiver draws no title, metadata or
-progress bar over it. When nothing
-is queued it shows a pygoals idle screen. It is published at
+pygoals ships with its own Google Cast receiver (Cast app `A7C76189`), a static
+CAF v3 Web Receiver in `receiver/` published at
 https://gratefulnuckle.github.io/pygoals-receiver/ (mirror repo
-`gratefulnuckle/pygoals-receiver`, GitHub Pages) and registered as Cast app
-`A7C76189`.
+`gratefulnuckle/pygoals-receiver`, GitHub Pages). It plays the goal and draws
+the player card as an HTML overlay: headshot, team logo and colours, scorer and
+title. The card appears the instant a goal is loaded (it covers buffering),
+stays for the card duration, then fades out to clean video, so there is no gap
+and no PNG/MP4 card is generated. The goal plays in a plain `<video>` element,
+so the receiver draws no title, metadata or progress bar over it. When nothing
+is queued it shows a pygoals idle screen.
 
-The app is unpublished, so it only launches on devices registered as test
-devices in the [Cast SDK Developer Console](https://cast.google.com/publish/)
-(add the device serial number, then allow ~15 minutes and reboot the device).
-Others can register their own receiver URL and put that app ID in settings.
+**It is unpublished for now.** Google only lets an unpublished receiver run on
+devices registered as test devices in the
+[Cast SDK Developer Console](https://cast.google.com/publish/) (add the device
+serial number, allow ~15 minutes, reboot the device). On every other TV the
+launch is refused and pygoals quietly uses the standard Default Media Receiver
+with video cards instead (logged at INFO, no notification). Nothing needs to be
+configured either way.
 
 ```ini
 [cast]
 receiver_mode = auto        ; auto | custom | default
-receiver_app_id = A7C76189  ; blank = always the Default Media Receiver
+receiver_app_id = A7C76189  ; built-in default; blank = never use a custom receiver
 ```
 
-* `auto`: launch the pygoals receiver when an app ID is set; if it can't launch
-  (device not registered, timeout) show one notification and keep using the
-  Default Media Receiver with video cards until settings change or another TV
-  is picked.
-* `custom`: always try the pygoals receiver (retried for each goal; falls back
-  to the default receiver for that goal).
+* `auto` (default): try the pygoals receiver; if the TV refuses it, use the
+  standard receiver until settings change or another TV is picked.
+* `custom`: always try it (retried for each goal; that goal falls back to the
+  standard receiver) and show one notification if it isn't available.
 * `default`: never use it.
+
+To use your own receiver, register its URL in the Cast console and put that app
+ID in `receiver_app_id`; to opt out entirely, leave `receiver_app_id` blank or
+set `receiver_mode = default`.
 
 `[cast] video_overlay = false` (default) also keeps text off the video on the
 Default Media Receiver: goal loads carry no title/subtitle/image metadata (the

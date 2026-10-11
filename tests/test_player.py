@@ -705,8 +705,7 @@ def test_auto_falls_back_to_default_receiver_once(key, monkeypatch):
         cast.media_controller.finish()
         assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
         assert cast.started_apps == ["A7C76189"]  # auto: not retried for every goal
-        assert [k for k, _ in errors] == [player_mod.ERR_RECEIVER]
-        assert "registered" in errors[0][1] and "default receiver" in errors[0][1]
+        assert errors == []  # auto falls back quietly (logged at INFO)
         p.reset_receiver_choice()  # e.g. settings saved
         assert p.wants_custom_receiver() is True
     finally:
@@ -717,6 +716,8 @@ def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
     p, cast = _custom_player(mode="custom", launch_error=TimeoutError("start app timed out"), card_mode="off")
     errors = []
     p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(kind))
+    messages = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: messages.append(message))
     try:
         p.poll_listing()
         connect(p)
@@ -725,6 +726,7 @@ def test_custom_mode_retries_each_goal_but_toasts_once(key, monkeypatch):
         assert wait_for(lambda: len(cast.media_controller.videos()) == 2)
         assert cast.started_apps == ["A7C76189", "A7C76189"]
         assert errors == [player_mod.ERR_RECEIVER]
+        assert "standard Cast receiver" in messages[0] and "timed out" not in messages[0]
     finally:
         p.shutdown()
 
