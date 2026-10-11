@@ -445,9 +445,23 @@ class SettingsDialog(DarkDialog):
                                       stored.poll_seconds, " s")
         form.addRow("Poll every", self.poll_spin)
         self.widgets["poll_seconds"] = self.poll_spin
+        self.card_mode_combo = QComboBox()
+        for value, label in (("video", "Video \u2014 seamless into the goal"),
+                             ("image", "Image \u2014 receiver restarts before the goal"),
+                             ("off", "Off \u2014 no player card")):
+            self.card_mode_combo.addItem(label, value)
+        self._select(self.card_mode_combo, stored.card_mode, stored.card_mode)
+        self.card_mode_combo.setToolTip("Video cards need ffmpeg (pip install imageio-ffmpeg); "
+                                        "without it image cards are used")
+        form.addRow("Player card", self.card_mode_combo)
+        self.widgets["card_mode"] = self.card_mode_combo
         self.card_spin = self._double(0, 30, stored.card_seconds, " s")
-        form.addRow("Card time", self.card_spin)
+        self.card_spin.setToolTip("How long the card shows (video cards last at least 1 s)")
+        form.addRow("Card duration", self.card_spin)
         self.widgets["card_seconds"] = self.card_spin
+        self.card_mode_combo.currentIndexChanged.connect(
+            lambda _i: self.card_spin.setEnabled(self.card_mode_combo.currentData() != "off"))
+        self.card_spin.setEnabled(stored.card_mode != "off")
         self.quality_combo = QComboBox()
         self.quality_combo.setToolTip("Renditions Brightcove offers for NHL goals (H.264 only)")
         self._fill_quality(brightcove_mod.STATIC_OPTIONS)
@@ -468,9 +482,6 @@ class SettingsDialog(DarkDialog):
         self.height_combo.setToolTip("Auto picks the tallest H.264 rendition up to this height")
         form.addRow("Auto max height", self.height_combo)
         self.widgets["max_height"] = self.height_combo
-        self.show_cards = self._check("Show player card before each clip", stored.show_cards)
-        form.addRow("", self.show_cards)
-        self.widgets["show_cards"] = self.show_cards
         self.remember_seen = self._check("Remember played clips across restarts", stored.remember_seen)
         form.addRow("", self.remember_seen)
         self.widgets["remember_seen"] = self.remember_seen

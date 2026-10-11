@@ -130,13 +130,25 @@ lower one is used. Changes apply to the next clip, including ones already
 queued. Settings with a fixed set of values (video quality, auto max height,
 log level) are dropdowns.
 
-Some Google TV devices (seen on an onn 4K Pro) play only the audio of a video
-that is loaded into a Default Media Receiver session that was showing an image
-(the player card); the clock freezes a few seconds in. pygoals therefore
-restarts the receiver between the card and the clip (the TV shows the cast
-backdrop for a moment). A watchdog polls the receiver every few seconds and
-skips a clip whose position stops advancing for 25 s or that runs well past its
-length.
+Player cards come in three styles (`[playback] card_mode`, also in Settings as
+"Player card"):
+
+* `video` (default): the card is encoded into a short silent 1080p H.264 clip
+  (about 1 s of ffmpeg, done in the background while the previous goal plays)
+  and sent to the TV together with the goal as a two-item cast queue, so the TV
+  goes card -> goal with about a second of buffering and no backdrop. Needs
+  ffmpeg: `imageio-ffmpeg` (a dependency, bundles a binary) or `ffmpeg` on
+  PATH; without it pygoals falls back to `image`.
+* `image`: the card is shown as a still PNG. Some Google TV devices (seen on
+  an onn 4K Pro) play only the audio of a video loaded after an image in the
+  same receiver session, with the clock frozen a few seconds in, so pygoals
+  restarts the receiver between card and goal. That leaves several seconds of
+  cast backdrop in between.
+* `off`: no card.
+
+`card_seconds` ("Card duration") sets how long the card shows (video cards are
+at least 1 s). A watchdog polls the receiver every few seconds and skips a clip
+whose position stops advancing for 25 s or that runs well past its length.
 
 ## Troubleshooting: the TV shows a blank receiver / no player cards
 

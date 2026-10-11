@@ -21,7 +21,7 @@ def test_save_load_roundtrip(tmp_path):
     path = tmp_path / "settings.ini"
     original = s.Settings(policy_key="abc%def", device_name="Living Room", device_uuid="u-1",
                           device_host="192.168.1.50", known_hosts=["192.168.1.50", "tv.lan"],
-                          poll_seconds=30, card_seconds=2.5, show_cards=False, port=8765,
+                          poll_seconds=30, card_seconds=2.5, card_mode="image", port=8765,
                           snap_to_tray=False, bar_x=-1200, bar_y=40, notify_goals=False,
                           toast_seconds=9, log_level="DEBUG", log_to_file=False)
     s.save(original, path)
@@ -35,18 +35,18 @@ def test_validation_reports_every_bad_field():
             "poll_seconds": "1",
             "port": "70000",
             "log_level": "LOUD",
-            "show_cards": "maybe",
+            "card_mode": "maybe",
             "known_hosts": "192.168.1.5, bad host!",
             "toast_seconds": "nan",
             "nonsense": "1",
         })
-    assert set(info.value.errors) == {"poll_seconds", "port", "log_level", "show_cards",
+    assert set(info.value.errors) == {"poll_seconds", "port", "log_level", "card_mode",
                                       "known_hosts", "toast_seconds", "nonsense"}
 
 
 def test_validation_accepts_good_values():
     result = s.validate_values({"poll_seconds": "45", "port": "0", "log_level": "warning",
-                                "show_cards": "no", "known_hosts": "192.168.1.5; tv.lan",
+                                "card_mode": "off", "known_hosts": "192.168.1.5; tv.lan",
                                 "bar_x": "", "policy_key": "  key  "})
     assert result.poll_seconds == 45.0
     assert result.log_level == "WARNING"
@@ -148,3 +148,13 @@ def test_quality_setting():
     assert s.validate_values({"quality": "hls:adaptive"}).quality == "hls:adaptive"
     with pytest.raises(s.SettingsError):
         s.validate_values({"quality": "best"})
+
+
+def test_card_mode_default_and_legacy_show_cards(tmp_path):
+    assert s.Settings().card_mode == "video" and s.Settings().show_cards is True
+    assert s.validate_values({"card_mode": "IMAGE"}).card_mode == "image"
+    path = tmp_path / "settings.ini"
+    path.write_text("[playback]\nshow_cards = false\n", encoding="utf-8")
+    assert s.load(path).card_mode == "off"
+    path.write_text("[playback]\nshow_cards = false\ncard_mode = image\n", encoding="utf-8")
+    assert s.load(path).card_mode == "image"

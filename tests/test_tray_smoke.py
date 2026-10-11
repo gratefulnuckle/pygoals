@@ -156,9 +156,16 @@ def test_settings_quality_dropdown_uses_live_renditions(controller, qapp, isolat
     dialog.quality_combo.setCurrentIndex(dialog.quality_combo.findData("hls:1080"))
     dialog.height_combo.setCurrentIndex(dialog.height_combo.findData("720"))
     dialog.level_combo.setCurrentIndex(dialog.level_combo.findData("DEBUG"))
+    assert dialog.card_mode_combo.currentData() == "video"
+    dialog.card_mode_combo.setCurrentIndex(dialog.card_mode_combo.findData("off"))
+    assert not dialog.card_spin.isEnabled()
+    dialog.card_mode_combo.setCurrentIndex(dialog.card_mode_combo.findData("image"))
+    dialog.card_spin.setValue(3)
     assert dialog.save() is True
     qapp.processEvents()
     assert controller.player.options.quality == "hls:1080"
     assert controller.player.options.max_height == 720
+    assert controller.player.options.card_mode == "image" and controller.player.options.card_seconds == 3
     text = (isolated_home / "settings.ini").read_text(encoding="utf-8")
     assert "quality = hls:1080" in text and "max_height = 720" in text and "level = DEBUG" in text
+    assert "card_mode = image" in text and "card_seconds = 3" in text

@@ -108,7 +108,7 @@ class Runtime:
         if args.port is not None:
             out["port"] = args.port
         if args.no_overlay:
-            out["show_cards"] = False
+            out["card_mode"] = "off"
         if args.log_level:
             out["log_level"] = args.log_level
         if args.no_log_file:
@@ -131,6 +131,7 @@ class Runtime:
             max_height=eff.max_height,
             quality=eff.quality,
             show_cards=eff.show_cards,
+            card_mode=eff.card_mode,
             port=eff.port,
             known_hosts=list(eff.known_hosts),
             overlay_path=self.args.overlay_path,
@@ -152,6 +153,7 @@ class Runtime:
         options.max_height = eff.max_height
         options.quality = eff.quality
         options.show_cards = eff.show_cards
+        options.card_mode = eff.card_mode
         options.known_hosts = list(eff.known_hosts)
         if eff.remember_seen and player.seen_store is None:
             player.seen_store = SeenStore(state_path())

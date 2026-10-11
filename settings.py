@@ -41,7 +41,7 @@ class Settings:
     card_seconds: float = 4.0
     max_height: int = 1080
     quality: str = "auto"
-    show_cards: bool = True
+    card_mode: str = "video"
     remember_seen: bool = True
     # [server]
     port: int = 8765
@@ -64,6 +64,10 @@ class Settings:
             return None
         return (self.bar_x, self.bar_y)
 
+    @property
+    def show_cards(self):
+        return self.card_mode != "off"
+
     def copy(self, **changes):
         return replace(self, known_hosts=list(self.known_hosts), **changes)
 
@@ -79,7 +83,7 @@ SCHEMA = (
     ("playback", "card_seconds", "card_seconds", "card"),
     ("playback", "quality", "quality", "quality"),
     ("playback", "max_height", "max_height", "height"),
-    ("playback", "show_cards", "show_cards", "bool"),
+    ("playback", "card_mode", "card_mode", "cardmode"),
     ("playback", "remember_seen", "remember_seen", "bool"),
     ("server", "port", "port", "port"),
     ("ui", "snap_to_tray", "snap_to_tray", "bool"),
@@ -96,7 +100,7 @@ SCHEMA = (
 COMMENTS = {
     "brightcove": "Brightcove player policy key. BRIGHTCOVE_PK in the environment or .env overrides this.",
     "device": "Active Chromecast. Set from the Devices page; uuid is matched first, then name, then host.",
-    "playback": "poll_seconds: 5-3600. card_seconds: 0-30 (0 = no pause on the card). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
+    "playback": "poll_seconds: 5-3600. card_mode: video (card plays as a short clip right before the goal, seamless), image (still card; the receiver restarts before the goal) or off. card_seconds: 0-30 (video cards last at least 1 s). quality: auto, hls:<height>, mp4:<height> or hls:adaptive (pick it in Settings). max_height: cap for auto, 240-2160.",
     "server": "LAN port the TV fetches player cards from. Keep it fixed (default 8765) so one firewall rule covers it; 0 = random port each run.",
     "ui": "Media bar position. snap_to_tray = true ignores bar_x/bar_y and anchors above the tray icon.",
     "notifications": "Dark toast notifications above the tray. toast_seconds: 2-60.",
@@ -116,6 +120,7 @@ ENV_OVERRIDES = {
 
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,252})$|^[0-9A-Fa-f:]+$")
 _QUALITY_RE = re.compile(r"^(auto|hls:adaptive|(hls|mp4):[0-9]{3,4})$")
+CARD_MODES = ("video", "image", "off")
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -159,6 +164,11 @@ def _convert(kind, raw):
             raise ValueError("expected a whole number 0-65535") from None
         if not 0 <= value <= 65535:
             raise ValueError("must be 0-65535")
+        return value
+    if kind == "cardmode":
+        value = (text or "video").lower()
+        if value not in CARD_MODES:
+            raise ValueError("must be one of " + ", ".join(CARD_MODES))
         return value
     if kind == "quality":
         value = (text or "auto").lower()
@@ -251,6 +261,13 @@ def from_parser(parser):
             setattr(result, attr, _convert(kind, parser.get(section, option, raw=True)))
         except ValueError as exc:
             problems["{}.{}".format(section, option)] = str(exc)
+    # Older files: [playback] show_cards = false meant no cards.
+    if not parser.has_option("playback", "card_mode") and parser.has_option("playback", "show_cards"):
+        try:
+            if not _convert("bool", parser.get("playback", "show_cards", raw=True)):
+                result.card_mode = "off"
+        except ValueError:
+            pass
     for key, message in problems.items():
         log.warning("settings.ini %s ignored: %s", key, message)
     return result, problems
