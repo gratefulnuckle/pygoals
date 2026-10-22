@@ -767,20 +767,27 @@ class NHLVideoPlayer:
             return True
         log.info("launching the pygoals Cast receiver %s on %s", app, self.device.name if self.device else "?")
         started = time.monotonic()
+        receiver = _receiver_controller(cast)
+        if receiver is not None:
+            receiver.launch_failure = None  # so a stale LAUNCH_ERROR isn't reported
         try:
             cast.start_app(app, timeout=CUSTOM_LAUNCH_TIMEOUT)
         except Exception as exc:  # noqa: BLE001 - RequestFailed / RequestTimeout / socket errors
-            self._custom_receiver_failed(exc)
+            self._custom_receiver_failed(exc, launch_error_reason(receiver))
             return False
         log.info("pygoals receiver %s running (%.1fs)", app, time.monotonic() - started)
         self._image_session = False
         self._idle_shown = False
         return True
 
-    def _custom_receiver_failed(self, exc):
+    def _custom_receiver_failed(self, exc, reason=None):
         app = self.options.receiver_app_id
         auto = (self.options.receiver_mode or "auto").lower() == "auto"
         detail = str(exc) or type(exc).__name__
+        if reason:
+            # pychromecast only says "Failed to execute start app"; the TV's
+            # LAUNCH_ERROR reason is what tells the cases apart.
+            detail = "{}; LAUNCH_ERROR {}: {}".format(detail, reason, launch_error_hint(reason))
         device = self.device.name if self.device else "the TV"
         if auto:
             # Normal for most TVs while the receiver is unpublished: no toast.
@@ -1206,3 +1213,32 @@ def available_renditions(pk=None, player=None, fetch_listing=None, http_get=None
     cache["options"], cache["at"] = options, now
     return options, True
 
+
+# LAUNCH_ERROR reasons a Cast device returns for a receiver app, as observed on
+# an onn 4K Pro (Google TV, cast 3.72): an app ID Google doesn't know (typo,
+# deleted, wrong case) gives NOT_FOUND; a known app this device may not run
+# gives NOT_ALLOWED.
+LAUNCH_ERROR_HINTS = {
+    "NOT_FOUND": "Google has no Cast app with this ID (typo, wrong case or deleted app)",
+    "NOT_ALLOWED": ("the app exists but this device may not run it: it is unpublished and this "
+                    "device's Cast (software) serial isn't registered in the Cast SDK Developer "
+                    "Console, or registration is under ~15 min old / the device wasn't rebooted"),
+}
+
+
+def _receiver_controller(cast):
+    try:
+        return cast.socket_client.receiver_controller
+    except AttributeError:
+        return None
+
+
+def launch_error_reason(receiver):
+    """Reason of the last LAUNCH_ERROR the receiver controller saw, or None."""
+    failure = getattr(receiver, "launch_failure", None) if receiver is not None else None
+    reason = getattr(failure, "reason", None)
+    return str(reason) if reason else None
+
+
+def launch_error_hint(reason):
+    return LAUNCH_ERROR_HINTS.get(reason, "see the Cast SDK Developer Console")

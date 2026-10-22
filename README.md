@@ -175,6 +175,16 @@ launch is refused and pygoals quietly uses the standard Default Media Receiver
 with video cards instead (logged at INFO, no notification). Nothing needs to be
 configured either way.
 
+On Google TV / Android TV devices (e.g. onn. 4K Pro) register the **software
+(Cast) serial**, not the hardware serial on the box or sticker: cast the Cast
+console tab from Chrome to the TV and it shows the serial, or enable developer
+mode (Settings > System > About > Android TV OS build, tap repeatedly) and read
+it under Settings > System > Cast (or Device Preferences > Google Cast). It
+changes after a factory reset. The log line for a refused launch includes the
+TV's `LAUNCH_ERROR` reason: `NOT_ALLOWED` means Google knows the app but this
+device may not run it (unpublished + device not registered, or registration
+not yet active); `NOT_FOUND` means the app ID is unknown (typo or deleted app).
+
 ```ini
 [cast]
 receiver_mode = auto        ; auto | custom | default
