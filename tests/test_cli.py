@@ -112,3 +112,34 @@ def test_choose_device_from_settings_and_single_device():
     assert device is None and code == 1
     device, _ = choose_device(_devices("Only"), Settings(), input_fn=lambda _p: pytest.fail("prompted"))
     assert device.name == "Only"
+
+
+def test_frozen_paths_live_next_to_the_exe(tmp_path, monkeypatch):
+    import sys
+
+    import config
+
+    exe = tmp_path / "dist" / "pygoals" / "pygoals.exe"
+    exe.parent.mkdir(parents=True)
+    (exe.parent / "_internal" / "assets").mkdir(parents=True)
+    (exe.parent / "_internal" / "assets" / "logo.png").write_bytes(b"png")
+    monkeypatch.delenv("PYGOALS_HOME", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(sys, "_MEIPASS", str(exe.parent / "_internal"), raising=False)
+    assert config.app_dir() == exe.parent
+    assert config.settings_path().parent == exe.parent
+    assert config.asset_path("logo.png") == exe.parent / "_internal" / "assets" / "logo.png"
+
+
+def test_cli_exe_defaults_to_console_mode(monkeypatch):
+    import sys
+
+    import pygoals
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\apps\pygoals\pygoals-cli.exe")
+    assert pygoals._frozen_cli_default(["--device", "onn"]) == ["--cli", "--device", "onn"]
+    assert pygoals._frozen_cli_default(["--tray"]) == ["--tray"]
+    monkeypatch.setattr(sys, "executable", r"C:\apps\pygoals\pygoals.exe")
+    assert pygoals._frozen_cli_default(["--device", "onn"]) == ["--device", "onn"]

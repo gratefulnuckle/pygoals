@@ -289,8 +289,22 @@ def run_console(runtime):
                 pass
 
 
+def _frozen_cli_default(argv):
+    """pygoals-cli.exe (console build) runs in console mode unless told otherwise."""
+    if not getattr(sys, "frozen", False):
+        return argv
+    from pathlib import Path
+
+    if not Path(sys.executable).stem.lower().endswith("-cli"):
+        return argv
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--tray" not in argv and "--cli" not in argv and "--no-tray" not in argv:
+        argv.insert(0, "--cli")
+    return argv
+
+
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(_frozen_cli_default(argv))
     if args.version:
         print("pygoals " + __version__)
         return 0
