@@ -146,6 +146,12 @@ class ClipQueue:
             self._started = False
             return clip
 
+    def retry(self, clip):
+        """Put a clip that was just finished back at the front (stall retry)."""
+        with self._lock:
+            self._pending.appendleft(clip)
+            self._queued.add(clip.brightcove_id)
+
     def abort_current(self):
         """Release whatever is current (load failure, device switch)."""
         with self._lock:

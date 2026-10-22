@@ -32,6 +32,10 @@ CONNECT_TIMEOUT = 15.0
 ACTIVE_TIMEOUT = 20.0        # s for the receiver to accept a video LOAD
 CARD_FETCH_TIMEOUT = 6.0     # s for the TV to GET the card from our server
 STALL_SECONDS = 25.0         # s stuck BUFFERING without progress => skip
+CARD_STALL_SECONDS = 8.0     # s a (4 s) card video may sit without progress => receiver wedged
+END_TOLERANCE = 0.75         # s from the end that counts as "played to the end"
+END_GRACE = 4.0              # s parked at the end without FINISHED => treat as finished
+STALL_RETRIES = 1            # retries of a stalled goal in a fresh receiver
 OVERRUN_GRACE = 45.0         # s past the clip duration => skip
 WATCHDOG_INTERVAL = 2.0
 STATUS_REFRESH = 6.0
@@ -200,6 +204,8 @@ class _AdvanceListenerMixin:
         reason = str(getattr(status, "idle_reason", "") or "")
         if state == "IDLE" and reason in ("FINISHED", "ERROR"):
             self.player.on_clip_ended(reason, getattr(status, "content_id", None))
+        elif state == "IDLE" and not reason:
+            self.player.on_idle(getattr(status, "content_id", None))
 
     def load_media_failed(self, queue_item_id=None, error_code=None):
         if self.cast is not self.player.cast:
@@ -250,7 +256,11 @@ class NHLVideoPlayer:
         self._card_warned = False
         self._image_session = False
         self._expect_url = None
+        self._card_url = None        # card item queued in front of the current goal
         self._clip_playing_seen = False
+        self._goal_pos = (None, None)  # last (current_time, duration) while the goal played
+        self._fresh_receiver = False   # a stall wedged the receiver: restart it before the next load
+        self._stall_retries = {}       # brightcove id -> retries used
         self._card_cache = {}
         self._card_lock = threading.Lock()
         self._card_threads = {}
@@ -587,14 +597,16 @@ class NHLVideoPlayer:
         is closed and play_media launches a new one.
         """
         cast = self.cast
-        if cast is None or not self._image_session:
+        if cast is None or not (self._image_session or self._fresh_receiver):
             return
-        log.info("restarting the Default Media Receiver before the video (image session)")
+        why = "stalled session" if self._fresh_receiver else "image session"
+        log.info("restarting the Cast receiver before the video (%s)", why)
         try:
             cast.quit_app(timeout=10)
         except Exception:
             log.warning("could not quit the receiver app", exc_info=True)
         self._image_session = False
+        self._fresh_receiver = False
         with self._status_cond:
             self._last_status = None
         self.stop.wait(RECEIVER_RESTART_PAUSE)
@@ -700,6 +712,7 @@ class NHLVideoPlayer:
         }
         self._load_failed.clear()
         self._image_session = False
+        self._card_url = card_url
         log.info("QUEUE_LOAD card video %s + %s %s on %s", describe_url(card_url), clip.mime,
                  describe_url(clip.playback_url), self.device.name if self.device else "?")
         mc.send_message(message, inc_session_id=True)
@@ -792,6 +805,12 @@ class NHLVideoPlayer:
             self.queue.mark_failed(clip.brightcove_id)
             return False
         self._refresh_rendition(clip)
+        self._card_url = None
+        self._goal_pos = (None, None)
+        if self._fresh_receiver:
+            # The last goal stalled; the onn's player stays wedged in that
+            # session (every later item freezes), so start a new one.
+            self._reset_receiver_after_image()
         custom = self.wants_custom_receiver() and self._ensure_custom_receiver()
         extra = None
         if custom:
@@ -903,6 +922,9 @@ class NHLVideoPlayer:
         state = getattr(status, "player_state", None)
         reason = getattr(status, "idle_reason", None)
         content = getattr(status, "content_id", None)
+        if (self._clip_playing_seen and content == self._expect_url and state in ("PLAYING", "BUFFERING", "PAUSED")
+                and isinstance(getattr(status, "current_time", None), (int, float))):
+            self._goal_pos = (status.current_time, getattr(status, "duration", None))
         key = (state, reason, content)
         if key != self._status_key:
             self._status_key = key
@@ -934,8 +956,20 @@ class NHLVideoPlayer:
             except Exception:
                 log.debug("watchdog check failed", exc_info=True)
 
+    def _played_to_end(self):
+        current, duration = self._goal_pos
+        return (self._clip_playing_seen and isinstance(current, (int, float))
+                and isinstance(duration, (int, float)) and duration > 0
+                and current >= duration - END_TOLERANCE)
+
     def check_playback(self, last_refresh=0.0, now=None):
-        """Skip a clip that is stuck buffering or runs far past its length."""
+        """Backstop for a goal that never reports FINISHED.
+
+        * parked at its last frame without FINISHED -> finished (no error);
+        * the card video or the goal stuck without progress -> the receiver
+          session is wedged: restart it and retry the goal once, then skip;
+        * running far past its length -> skip (and restart the receiver).
+        """
         now = time.monotonic() if now is None else now
         clip = self.queue.current
         if clip is None or not self.queue.started:
@@ -948,23 +982,54 @@ class NHLVideoPlayer:
                 log.debug("update_status failed", exc_info=True)
             last_refresh = now
         status = self._last_status
+        content = getattr(status, "content_id", None) if status is not None else None
         reason = None
-        if status is not None and getattr(status, "content_id", None) == clip.playback_url:
+        stalled = False
+        if content and content in (clip.playback_url, self._card_url):
             current = getattr(status, "current_time", None)
-            last_time, since = self._progress
-            if current != last_time:
-                self._progress = (current, now)
-            elif getattr(status, "player_state", None) in ("BUFFERING", "PLAYING") and now - since >= STALL_SECONDS:
-                reason = "stuck {} at {}s for {:.0f}s".format(status.player_state, current, now - since)
+            state = getattr(status, "player_state", None)
+            key = (content, current)
+            last_key, since = self._progress
+            if key != last_key:
+                self._progress = (key, now)
+            else:
+                stuck_for = now - since
+                on_card = content == self._card_url
+                if content == clip.playback_url and self._played_to_end() and stuck_for >= END_GRACE:
+                    finished = self.queue.finish_current()
+                    if finished is not None:
+                        log.info("%s played to the end (t=%s/%s) without FINISHED; advancing",
+                                 finished.title, *self._goal_pos)
+                        self.kick()
+                    return last_refresh
+                limit = CARD_STALL_SECONDS if on_card else STALL_SECONDS
+                if state in ("BUFFERING", "PLAYING") and stuck_for >= limit:
+                    stalled = True
+                    reason = "{} stuck {} at {}s for {:.0f}s".format(
+                        "card video" if on_card else "goal", state, current, stuck_for)
         limit = max(30.0, (clip.duration_ms or 0) / 1000.0) + OVERRUN_GRACE
         if reason is None and now - self._started_at > limit:
             reason = "still not finished {:.0f}s after start".format(now - self._started_at)
         if reason:
             finished = self.queue.finish_current()
             if finished is not None:
-                self.report_error(ERR_PLAYBACK, "Skipping {}: {}".format(finished.title, reason))
+                self._fresh_receiver = True
+                used = self._stall_retries.get(finished.brightcove_id, 0)
+                if stalled and used < STALL_RETRIES:
+                    self._stall_retries[finished.brightcove_id] = used + 1
+                    log.warning("%s: %s; restarting the receiver and retrying it", finished.title, reason)
+                    self.queue.retry(finished)
+                else:
+                    self.report_error(ERR_PLAYBACK, "Skipping {}: {}".format(finished.title, reason))
                 self.kick()
         return last_refresh
+
+    def on_idle(self, content_id=None):
+        """IDLE without a reason: some receivers end a stream this way."""
+        current = self.queue.current
+        if (current is not None and self.queue.started and content_id == current.playback_url
+                and self._played_to_end()):
+            self.on_clip_ended("FINISHED", content_id)
 
     def on_clip_ended(self, reason="FINISHED", content_id=None):
         # A late/duplicate FINISHED for an earlier clip must not end this one.

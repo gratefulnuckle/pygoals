@@ -398,7 +398,16 @@ def test_watchdog_skips_clip_stuck_buffering(key):
         p.check_playback(now=t0 + 10)
         assert len(mc.videos()) == 1  # still within the stall window
         p.check_playback(now=t0 + 1 + player_mod.STALL_SECONDS + 1)
+        # first stall: fresh receiver, same goal again (no toast)
         assert wait_for(lambda: len(mc.videos()) == 2)
+        assert mc.videos() == [url, url] and cast.quit_calls == 1 and errors == []
+        mc.emit(player_state="BUFFERING", content_id=url, current_time=4.176)
+        t1 = p._started_at
+        p.check_playback(now=t1 + 1)
+        p.check_playback(now=t1 + 2 + player_mod.STALL_SECONDS)
+        # second stall: skipped, receiver restarted again for the next goal
+        assert wait_for(lambda: len(mc.videos()) == 3)
+        assert mc.videos()[-1] == "https://cdn.example/bc2.mp4" and cast.quit_calls == 2
         assert "stuck BUFFERING" in errors[0]
         assert mc.update_calls >= 1  # watchdog asks the receiver for fresh status
     finally:
@@ -503,6 +512,7 @@ def test_watchdog_skips_clip_frozen_while_playing(key):
         p.check_playback(now=t0 + 1)
         p.check_playback(now=t0 + 2 + player_mod.STALL_SECONDS)
         assert wait_for(lambda: len(mc.videos()) == 2)
+        assert cast.quit_calls == 1  # the next load gets a fresh receiver
     finally:
         p.shutdown()
 
@@ -822,5 +832,102 @@ def test_refused_custom_receiver_on_connect_shows_default_idle_card(key, tmp_pat
         assert p.wants_custom_receiver() is False
         p.advance()
         assert cast.media_controller.played[-1][1] == "image/png"  # logo idle card on the default receiver
+    finally:
+        p.shutdown()
+
+
+# --- Oct 11 regression: replayed status sequences from logs/pygoals.log ------------------
+CARD1 = "http://192.168.1.10:8765/card-841-x.mp4"
+GOAL1 = "https://cdn.example/bc1.mp4"
+GOAL2 = "https://cdn.example/bc2.mp4"
+
+
+def _queue_session(tmp_path, monkeypatch, n=3):
+    cast = FakeCast()
+    p, _enc = _video_card_player(tmp_path, monkeypatch, cast, n=n)
+    errors = []
+    p.events.subscribe(player_mod.ERROR, lambda kind, message: errors.append(message))
+    p.poll_listing()
+    connect(p)
+    assert p.advance() is True
+    return p, cast, cast.media_controller, errors
+
+
+def test_goal_finished_after_card_advances_immediately(key, tmp_path, monkeypatch):
+    """09:20:26 sequence: card PLAYING, card FINISHED (reported with the goal id),
+    goal BUFFERING/PLAYING, goal FINISHED -> next goal at once, no watchdog."""
+    p, cast, mc, errors = _queue_session(tmp_path, monkeypatch)
+    try:
+        mc.emit(player_state="BUFFERING", content_id=CARD1, current_time=0.0, duration=4.0)
+        mc.emit(player_state="PLAYING", content_id=CARD1, current_time=0.0, duration=4.0)
+        mc.emit(player_state="IDLE", idle_reason="FINISHED", content_id=GOAL1, current_time=0.0, duration=4.0)
+        assert p.queue.current.brightcove_id == "bc1"  # card end is not the goal end
+        mc.emit(player_state="BUFFERING", content_id=GOAL1, current_time=0.0, duration=4.0)
+        mc.emit(player_state="PLAYING", content_id=GOAL1, current_time=0.0, duration=44.4)
+        p.check_playback(now=p._started_at + 10)
+        mc.emit(player_state="IDLE", idle_reason="FINISHED", content_id=GOAL1, current_time=0.0, duration=44.4)
+        assert wait_for(lambda: len(mc.queue_loads) == 2)
+        assert mc.queue_loads[-1][1][0] == GOAL2
+        assert errors == [] and cast.quit_calls == 0
+    finally:
+        p.shutdown()
+
+
+def test_goal_stall_then_wedged_cards_recover_with_fresh_receiver(key, tmp_path, monkeypatch):
+    """09:21:46-09:30 sequence: goal stuck BUFFERING at 22.17s; every following card
+    then froze at t=0.6 in the same receiver session until the 94-102 s overrun.
+    Now: fresh receiver + one retry, and a frozen card is caught in seconds."""
+    p, cast, mc, errors = _queue_session(tmp_path, monkeypatch)
+    try:
+        mc.emit(player_state="PLAYING", content_id=CARD1, current_time=0.0, duration=4.0)
+        mc.queue_advance()
+        mc.emit(player_state="PLAYING", content_id=GOAL1, current_time=0.0, duration=48.8)
+        mc.emit(player_state="BUFFERING", content_id=GOAL1, current_time=22.168609, duration=48.8)
+        t0 = time.monotonic()
+        p.check_playback(now=t0)
+        p.check_playback(now=t0 + player_mod.STALL_SECONDS + 1)
+        # retried in a fresh receiver session
+        assert wait_for(lambda: len(mc.queue_loads) == 2)
+        assert cast.quit_calls == 1 and mc.queue_loads[-1][1][0] == GOAL1 and errors == []
+        # the retry's card freezes at t=0.6 (the wedged-session symptom)
+        card = mc.queue_loads[-1][0][0]
+        mc.emit(player_state="BUFFERING", content_id=card, current_time=0.6, duration=4.0)
+        t1 = time.monotonic()
+        p.check_playback(now=t1)
+        p.check_playback(now=t1 + player_mod.CARD_STALL_SECONDS - 1)
+        assert len(mc.queue_loads) == 2
+        p.check_playback(now=t1 + player_mod.CARD_STALL_SECONDS + 1)  # seconds, not 94-102 s
+        assert wait_for(lambda: len(mc.queue_loads) == 3)
+        assert mc.queue_loads[-1][1][0] == GOAL2 and cast.quit_calls == 2
+        assert len(errors) == 1 and "card video stuck BUFFERING" in errors[0]
+    finally:
+        p.shutdown()
+
+
+def test_goal_parked_at_end_without_finished_advances(key, tmp_path, monkeypatch):
+    p, cast, mc, errors = _queue_session(tmp_path, monkeypatch)
+    try:
+        mc.queue_advance()
+        mc.emit(player_state="PLAYING", content_id=GOAL1, current_time=44.1, duration=44.4)
+        t0 = time.monotonic()
+        p.check_playback(now=t0)
+        p.check_playback(now=t0 + player_mod.END_GRACE + 0.5)
+        assert wait_for(lambda: len(mc.queue_loads) == 2)
+        assert errors == [] and cast.quit_calls == 0  # a normal end, not a stall
+    finally:
+        p.shutdown()
+
+
+def test_idle_without_reason_at_end_counts_as_finished(key, tmp_path, monkeypatch):
+    p, cast, mc, errors = _queue_session(tmp_path, monkeypatch)
+    try:
+        mc.queue_advance()
+        mc.emit(player_state="PLAYING", content_id=GOAL1, current_time=10.0, duration=44.4)
+        mc.emit(player_state="IDLE", content_id=GOAL1, current_time=10.0, duration=44.4)
+        assert p.queue.current.brightcove_id == "bc1"  # mid-clip IDLE is not an end
+        mc.emit(player_state="PLAYING", content_id=GOAL1, current_time=44.0, duration=44.4)
+        mc.emit(player_state="IDLE", content_id=GOAL1, current_time=44.0, duration=44.4)
+        assert wait_for(lambda: len(mc.queue_loads) == 2)
+        assert errors == []
     finally:
         p.shutdown()
