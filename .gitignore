@@ -18,6 +18,7 @@ logs/
 build/
 dist/
 *.spec
+!pygoals.spec
 
 # Generated cards
 *.png

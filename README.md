@@ -237,6 +237,35 @@ active on the PC:
 The PC's network should be marked *Private*. Alternatively turn cards off in
 Settings.
 
+## Portable exe (Windows)
+
+`build.ps1` turns the app into a self-contained folder with
+[PyInstaller](https://pyinstaller.org/), no Python needed on the target PC:
+
+```powershell
+.\build.ps1            # or: .\build.ps1 -Clean
+```
+
+It produces:
+
+| Path | What |
+|------|------|
+| `dist\pygoals\pygoals.exe` | The tray app (no console window), with the pygoals icon |
+| `dist\pygoals\pygoals-cli.exe` | Same program with a console; starts in `--cli` mode (other flags work too) |
+| `dist\pygoals\_internal\` | Python, PyQt6 + plugins, the logo assets, the bundled ffmpeg for video cards |
+| `dist\pygoals-<version>-win64.zip` | The folder zipped, ready to hand out |
+
+Copy or unzip the `pygoals` folder anywhere you can write to (not
+`Program Files`) and run `pygoals.exe`. `settings.ini`, `state.json` and
+`logs\` are created next to the exe on first run, so the folder stays
+portable. The build never includes your own `settings.ini`. The spec is
+`pygoals.spec`; the `receiver/` web app is not bundled (it runs on GitHub
+Pages).
+
+Pushing a tag like `v1.2.3` runs `.github/workflows/release.yml`, which runs
+the tests, builds the zip on `windows-latest` and attaches it to a GitHub
+Release for that tag.
+
 ## Run at login (Windows)
 
 Either drop a shortcut in the Startup folder (`Win+R`, `shell:startup`) with
@@ -246,7 +275,8 @@ target:
 "C:\path\to\pygoals\.venv\Scripts\pythonw.exe" "C:\path\to\pygoals\pygoals.py"
 ```
 
-or create a Task Scheduler task "At log on" running the same command.
+or create a Task Scheduler task "At log on" running the same command. With the
+portable build, point the shortcut at `pygoals.exe` instead.
 `pythonw.exe` has no console window; logs go to `logs\pygoals.log`. If you
 installed with `pip install -e .`, the `pygoals` GUI script in
 `.venv\Scripts\` works too. Pick the device once in the tray; no flags needed.
